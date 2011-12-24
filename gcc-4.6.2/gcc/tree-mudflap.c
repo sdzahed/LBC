@@ -286,6 +286,12 @@ static GTY (()) tree mf_init_fndecl;
 /* extern int __mf_set_options (const char*); */
 static GTY (()) tree mf_set_options_fndecl;
 
+/* LBC related function delcarations */
+static GTY (()) tree lbc_init_front_rz_fndecl;
+static GTY (()) tree lbc_uninit_front_rz_fndecl;
+static GTY (()) tree lbc_init_rear_rz_fndecl;
+static GTY (()) tree lbc_uninit_rear_rz_fndecl;
+static GTY (()) tree lbc_ensure_sframe_bitmap_fndecl;
 
 /* Helper for mudflap_init: construct a decl with the given category,
    name, and type, mark it an external reference, and pushdecl it.  */
@@ -342,51 +348,30 @@ mudflap_init (void)
   tree mf_init_fntype;
   tree mf_set_options_fntype;
 
+  tree lbc_init_uninit_rz_fntype;
+  tree lbc_ensure_sframe_fntype;
+
   if (done)
     return;
   done = true;
 
-  mf_uintptr_type = lang_hooks.types.type_for_mode (ptr_mode,
-                                                    /*unsignedp=*/true);
-  mf_const_string_type
-    = build_pointer_type (build_qualified_type
-                          (char_type_node, TYPE_QUAL_CONST));
+  lbc_init_uninit_rz_fntype =
+    build_function_type_list (void_type_node, ptr_type_node,
+                                unsigned_type_node, NULL_TREE);
+  lbc_ensure_sframe_fntype =
+    build_function_type_list (void_type_node, void_type_node,
+                                NULL_TREE);
 
-  mf_cache_struct_type = mf_make_mf_cache_struct_type (mf_uintptr_type);
-  mf_cache_structptr_type = build_pointer_type (mf_cache_struct_type);
-  mf_cache_array_type = build_array_type (mf_cache_struct_type, 0);
-  mf_check_register_fntype =
-    build_function_type_list (void_type_node, ptr_type_node, size_type_node,
-			      integer_type_node, mf_const_string_type, NULL_TREE);
-  mf_unregister_fntype =
-    build_function_type_list (void_type_node, ptr_type_node, size_type_node,
-			      integer_type_node, NULL_TREE);
-  mf_init_fntype =
-    build_function_type_list (void_type_node, NULL_TREE);
-  mf_set_options_fntype =
-    build_function_type_list (integer_type_node, mf_const_string_type, NULL_TREE);
-
-  mf_cache_array_decl = mf_make_builtin (VAR_DECL, "__mf_lookup_cache",
-                                         mf_cache_array_type);
-  mf_cache_shift_decl = mf_make_builtin (VAR_DECL, "__mf_lc_shift",
-                                         unsigned_char_type_node);
-  mf_cache_mask_decl = mf_make_builtin (VAR_DECL, "__mf_lc_mask",
-                                        mf_uintptr_type);
-  /* Don't process these in mudflap_enqueue_decl, should they come by
-     there for some reason.  */
-  mf_mark (mf_cache_array_decl);
-  mf_mark (mf_cache_shift_decl);
-  mf_mark (mf_cache_mask_decl);
-  mf_check_fndecl = mf_make_builtin (FUNCTION_DECL, "__mf_check",
-                                     mf_check_register_fntype);
-  mf_register_fndecl = mf_make_builtin (FUNCTION_DECL, "__mf_register",
-                                        mf_check_register_fntype);
-  mf_unregister_fndecl = mf_make_builtin (FUNCTION_DECL, "__mf_unregister",
-                                          mf_unregister_fntype);
-  mf_init_fndecl = mf_make_builtin (FUNCTION_DECL, "__mf_init",
-                                    mf_init_fntype);
-  mf_set_options_fndecl = mf_make_builtin (FUNCTION_DECL, "__mf_set_options",
-                                           mf_set_options_fntype);
+  lbc_init_front_rz_fndecl = mf_make_builtin (FUNCTION_DECL, "init_front_redzone",
+                                    lbc_init_uninit_rz_fntype);
+  lbc_uninit_front_rz_fndecl = mf_make_builtin (FUNCTION_DECL, "uninit_front_redzone",
+                                    lbc_init_uninit_rz_fntype);
+  lbc_init_rear_rz_fndecl = mf_make_builtin (FUNCTION_DECL, "init_rear_redzone",
+                                    lbc_init_uninit_rz_fntype);
+  lbc_uninit_rear_rz_fndecl = mf_make_builtin (FUNCTION_DECL, "uninit_rear_redzone",
+                                    lbc_init_uninit_rz_fntype);
+  lbc_ensure_sframe_bitmap_fndecl = mf_make_builtin (FUNCTION_DECL, "ensure_sframe_bitmap",
+                                    lbc_ensure_sframe_fntype);
 }
 
 
