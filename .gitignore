@@ -1,0 +1,5 @@
+gcc-4.6.2/cscope.files
+gcc-4.6.2/cscope.in.out
+gcc-4.6.2/cscope.out
+gcc-4.6.2/cscope.po.out
+*.swp
