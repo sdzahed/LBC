@@ -287,10 +287,19 @@ static GTY (()) tree mf_init_fndecl;
 static GTY (()) tree mf_set_options_fndecl;
 
 /* LBC related function delcarations */
+/* void init_front_redzone (void* front_rz, unsigned front_rz_size); */
 static GTY (()) tree lbc_init_front_rz_fndecl;
+
+/* void uninit_front_redzone (void* front_rz, unsigned front_rz_size) */
 static GTY (()) tree lbc_uninit_front_rz_fndecl;
+
+/* void init_rear_redzone (void* rear_rz, unsigned rear_rz_size) */
 static GTY (()) tree lbc_init_rear_rz_fndecl;
+
+/* void uninit_rear_redzone (void* rear_rz, unsigned rear_rz_size) */
 static GTY (()) tree lbc_uninit_rear_rz_fndecl;
+
+/* void ensure_sframe_bitmap() */
 static GTY (()) tree lbc_ensure_sframe_bitmap_fndecl;
 
 /* Helper for mudflap_init: construct a decl with the given category,
@@ -1040,45 +1049,60 @@ mx_register_decls (tree decl, gimple_seq seq, location_t location)
           && ! DECL_EXTERNAL (decl)
           && ! TREE_STATIC (decl))
         {
+
+	 /* construct a tree corresponding to the type struct{
+	 	 	unsigned int rz_front[6U];
+	 		original variable
+	 		unsigned int rz_rear[6U];
+	 	};
+	*/
+
+	tree fieldfront = build_array_type (integer_type_node, 0);
+	tree fieldrear = build_array_type (integer_type_node, 0);
+
+/*	tree fieldfront = build_decl (UNKNOWN_LOCATION,
+						 ARRAY_TYPE, get_identifier ("front"), integer_type_node);
+	tree fieldrear = build_decl (UNKNOWN_LOCATION,
+						 ARRAY_TYPE, get_identifier ("rear"), integer_type_node);
+*/
+	tree struct_type = make_node (RECORD_TYPE);
+
+	// This needs to be checked.
+	DECL_CONTEXT (fieldfront) = struct_type;
+	DECL_CONTEXT (decl) = struct_type;
+	DECL_CONTEXT (fieldrear) = struct_type;
+	
           tree size = NULL_TREE, variable_name;
-          gimple unregister_fncall, register_fncall;
-	  tree unregister_fncall_param, register_fncall_param;
+          gimple uninit_fncall_front, uninit_fncall_rear, init_fncall_front, init_fncall_rear;
+	 tree uninit_fncall_param_front, uninit_fncall_param_rear, init_fncall_param_front, init_fncall_param_rear;
 
 	  /* Variable-sized objects should have sizes already been
 	     gimplified when we got here. */
-	  size = convert (size_type_node, TYPE_SIZE_UNIT (TREE_TYPE (decl)));
+	 //size = convert (size_type_node, TYPE_SIZE_UNIT (TREE_TYPE (decl)));
+	 size = convert (size_type_node, TYPE_SIZE_UNIT (TREE_TYPE (struct_type)));
 	  gcc_assert (is_gimple_val (size));
 
+	// Need to change mf_mark
+          uninit_fncall_param_front = mf_mark (build1 (ADDR_EXPR, build_pointer_type (TREE_TYPE (struct_type)), struct_type));
+          uninit_fncall_front = gimple_build_call (lbc_uninit_front_rz_fndecl, 3, uninit_fncall_param_front, size, integer_three_node);
+          uninit_fncall_param_rear = mf_mark (build1 (ADDR_EXPR, build_pointer_type (TREE_TYPE (struct_type)), struct_type));
+          uninit_fncall_rear = gimple_build_call (lbc_uninit_rear_rz_fndecl, 3, uninit_fncall_param_rear, size, integer_three_node);
 
-          unregister_fncall_param =
-	    mf_mark (build1 (ADDR_EXPR,
-			     build_pointer_type (TREE_TYPE (decl)),
-			     decl));
-          /* __mf_unregister (&VARIABLE, sizeof (VARIABLE), __MF_TYPE_STACK) */
-          unregister_fncall = gimple_build_call (mf_unregister_fndecl, 3,
-						 unregister_fncall_param,
-						 size,
-						 integer_three_node);
+          variable_name = mf_varname_tree (struct_type);
 
-
-          variable_name = mf_varname_tree (decl);
-          register_fncall_param =
-	    mf_mark (build1 (ADDR_EXPR,
-			     build_pointer_type (TREE_TYPE (decl)),
-			     decl));
-          /* __mf_register (&VARIABLE, sizeof (VARIABLE), __MF_TYPE_STACK,
-	                    "name") */
-	  register_fncall = gimple_build_call (mf_register_fndecl, 4,
-					       register_fncall_param,
-					       size,
-					       integer_three_node,
-					       variable_name);
-
+          init_fncall_param_front = mf_mark (build1 (ADDR_EXPR, build_pointer_type (TREE_TYPE (struct_type)), struct_type));
+	 init_fncall_front = gimple_build_call (lbc_init_front_rz_fndecl, 4, init_fncall_param_front, size, integer_three_node, variable_name);
+          init_fncall_param_rear = mf_mark (build1 (ADDR_EXPR, build_pointer_type (TREE_TYPE (struct_type)), struct_type));
+	 init_fncall_rear = gimple_build_call (lbc_init_rear_rz_fndecl, 4, init_fncall_param_rear, size, integer_three_node, variable_name);
 
           /* Accumulate the two calls.  */
-	  gimple_set_location (register_fncall, location);
-	  gimple_set_location (unregister_fncall, location);
-
+	  //gimple_set_location (register_fncall, location);
+	  //gimple_set_location (unregister_fncall, location);
+	  gimple_set_location (init_fncall_front, location);
+	  gimple_set_location (init_fncall_rear, location);
+	  gimple_set_location (uninit_fncall_front, location);
+	  gimple_set_location (uninit_fncall_rear, location);
+	  
           /* Add the __mf_register call at the current appending point.  */
           if (gsi_end_p (initially_stmts))
 	    {
@@ -1089,11 +1113,14 @@ mx_register_decls (tree decl, gimple_seq seq, location_t location)
 	    }
 	  else
 	    {
-	      gsi_insert_before (&initially_stmts, register_fncall,
-				 GSI_SAME_STMT);
+	      //gsi_insert_before (&initially_stmts, register_fncall, GSI_SAME_STMT);
+	  	gsi_insert_before (&initially_stmts, init_fncall_front, GSI_SAME_STMT);
+		gsi_insert_before (&initially_stmts, init_fncall_rear, GSI_SAME_STMT);
 
 	      /* Accumulate the FINALLY piece.  */
-	      gimple_seq_add_stmt (&finally_stmts, unregister_fncall);
+	      //gimple_seq_add_stmt (&finally_stmts, unregister_fncall);
+	   	gimple_seq_add_stmt (&finally_stmts, uninit_fncall_front);
+		gimple_seq_add_stmt (&finally_stmts, uninit_fncall_rear);
 	    }
           mf_mark (decl);
         }
