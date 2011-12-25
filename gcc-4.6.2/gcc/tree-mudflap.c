@@ -1057,116 +1057,133 @@ mx_register_decls (tree decl, gimple_seq seq, location_t location)
 	 	};
 	*/
 
-	tree fieldfront = build_array_type (integer_type_node, 0);
-	tree fieldrear = build_array_type (integer_type_node, 0);
+    /* TODO Shouldn't we skip safe declarations. We need to only
+            instrument unsafe declarations like struct, array etc.
+            Look at funcs like is_gimple_address etc.
+    */
 
-/*	tree fieldfront = build_decl (UNKNOWN_LOCATION,
-						 ARRAY_TYPE, get_identifier ("front"), integer_type_node);
+    tree array_idx =  build_index_type (size_int (6U)); // TODO the size needs to be computed on the fly. How?
+	tree rz_array = build_array_type (integer_type_node, array_idx);
+
+	tree fieldfront = build_decl (UNKNOWN_LOCATION,
+						 ARRAY_TYPE, get_identifier ("rz_front"), rz_array);
+    /* TODO we would need another one for orig_var? Question: how do we copy
+     *      decl and remove it from original location?
+     * tree orig_var = build_decl (UNKNOWN_LOCATION,
+     *                     TREE_CODE(decl), get_identifier("orig_var"), decl);
+     */
 	tree fieldrear = build_decl (UNKNOWN_LOCATION,
-						 ARRAY_TYPE, get_identifier ("rear"), integer_type_node);
-*/
+						 ARRAY_TYPE, get_identifier ("rz_rear"), rz_array);
+
 	tree struct_type = make_node (RECORD_TYPE);
 
-	// This needs to be checked.
-	DECL_CONTEXT (fieldfront) = struct_type;
-	DECL_CONTEXT (decl) = struct_type;
-	DECL_CONTEXT (fieldrear) = struct_type;
-	
-          tree size = NULL_TREE, variable_name;
-          gimple uninit_fncall_front, uninit_fncall_rear, init_fncall_front, init_fncall_rear;
-	 tree uninit_fncall_param_front, uninit_fncall_param_rear, init_fncall_param_front, init_fncall_param_rear;
+    // TODO changes here. verify. orig_var needs to be inserted above.
+    DECL_CONTEXT (fieldfront) = struct_type;
+    DECL_CONTEXT (orig_var) = struct_type; // Look at comments above
+    DECL_CONTEXT (fieldrear) = struct_type;
+    DECL_CHAIN (fieldfront) = orig_var;
+    DECL_CHAIN (orig_var) = fieldrear;
 
-	  /* Variable-sized objects should have sizes already been
-	     gimplified when we got here. */
-	 //size = convert (size_type_node, TYPE_SIZE_UNIT (TREE_TYPE (decl)));
-	 size = convert (size_type_node, TYPE_SIZE_UNIT (TREE_TYPE (struct_type)));
-	  gcc_assert (is_gimple_val (size));
+    TYPE_FIELDS (struct_type) = fieldfront;
+    char *buf = strcat("rz_", get_name(decl)); //TODO will this give orig variable name?
+    TYPE_NAME (struct_type) = get_identifier (buf);
+    layout_type (struct_type);
 
-	// Need to change mf_mark
-          uninit_fncall_param_front = mf_mark (build1 (ADDR_EXPR, build_pointer_type (TREE_TYPE (struct_type)), struct_type));
-          uninit_fncall_front = gimple_build_call (lbc_uninit_front_rz_fndecl, 3, uninit_fncall_param_front, size, integer_three_node);
-          uninit_fncall_param_rear = mf_mark (build1 (ADDR_EXPR, build_pointer_type (TREE_TYPE (struct_type)), struct_type));
-          uninit_fncall_rear = gimple_build_call (lbc_uninit_rear_rz_fndecl, 3, uninit_fncall_param_rear, size, integer_three_node);
+    tree size = NULL_TREE;
+    gimple uninit_fncall_front, uninit_fncall_rear, init_fncall_front, init_fncall_rear;
+    tree fncall_param_front, fncall_param_rear;
 
-          variable_name = mf_varname_tree (struct_type);
+    /* Variable-sized objects should have sizes already been
+       gimplified when we got here. */
+    //size = convert (size_type_node, TYPE_SIZE_UNIT (TREE_TYPE (decl)));
+    size = convert (unsigned_type_node, TYPE_SIZE (fieldfront)); // TODO is this right? we need to provide size of RZ here.
+    gcc_assert (is_gimple_val (size));
 
-          init_fncall_param_front = mf_mark (build1 (ADDR_EXPR, build_pointer_type (TREE_TYPE (struct_type)), struct_type));
-	 init_fncall_front = gimple_build_call (lbc_init_front_rz_fndecl, 4, init_fncall_param_front, size, integer_three_node, variable_name);
-          init_fncall_param_rear = mf_mark (build1 (ADDR_EXPR, build_pointer_type (TREE_TYPE (struct_type)), struct_type));
-	 init_fncall_rear = gimple_build_call (lbc_init_rear_rz_fndecl, 4, init_fncall_param_rear, size, integer_three_node, variable_name);
+    // Need to change mf_mark
+    // TODO first paramter is void * pointer to the rz field (front or rear). not struct type.
+    //      Moreover, there are only two parameters, unlike mudflap's calls.
+    fncall_param_front = mf_mark (build1 (ADDR_EXPR, ptr_type_node, fieldfront));
+    uninit_fncall_front = gimple_build_call (lbc_uninit_front_rz_fndecl, 2, fncall_param_front, size);
+    fncall_param_rear = mf_mark (build1 (ADDR_EXPR, ptr_type_node, fieldrear));
+    uninit_fncall_rear = gimple_build_call (lbc_uninit_rear_rz_fndecl, 2, fncall_param_rear, size);
 
-          /* Accumulate the two calls.  */
-	  //gimple_set_location (register_fncall, location);
-	  //gimple_set_location (unregister_fncall, location);
-	  gimple_set_location (init_fncall_front, location);
-	  gimple_set_location (init_fncall_rear, location);
-	  gimple_set_location (uninit_fncall_front, location);
-	  gimple_set_location (uninit_fncall_rear, location);
-	  
-          /* Add the __mf_register call at the current appending point.  */
-          if (gsi_end_p (initially_stmts))
-	    {
-	      if (!DECL_ARTIFICIAL (decl))
-		warning (OPT_Wmudflap,
-			 "mudflap cannot track %qE in stub function",
-			 DECL_NAME (decl));
-	    }
-	  else
-	    {
-	      //gsi_insert_before (&initially_stmts, register_fncall, GSI_SAME_STMT);
-	  	gsi_insert_before (&initially_stmts, init_fncall_front, GSI_SAME_STMT);
-		gsi_insert_before (&initially_stmts, init_fncall_rear, GSI_SAME_STMT);
+    init_fncall_front = gimple_build_call (lbc_init_front_rz_fndecl, 2, fncall_param_front, size);
+    init_fncall_rear = gimple_build_call (lbc_init_rear_rz_fndecl, 2, fncall_param_rear, size);
 
-	      /* Accumulate the FINALLY piece.  */
-	      //gimple_seq_add_stmt (&finally_stmts, unregister_fncall);
-	   	gimple_seq_add_stmt (&finally_stmts, uninit_fncall_front);
-		gimple_seq_add_stmt (&finally_stmts, uninit_fncall_rear);
-	    }
-          mf_mark (decl);
+    /* Accumulate the two calls.  */
+    //gimple_set_location (register_fncall, location);
+    //gimple_set_location (unregister_fncall, location);
+    gimple_set_location (init_fncall_front, location);
+    gimple_set_location (init_fncall_rear, location);
+    gimple_set_location (uninit_fncall_front, location);
+    gimple_set_location (uninit_fncall_rear, location);
+
+    /* Add the __mf_register call at the current appending point.  */
+    if (gsi_end_p (initially_stmts))
+    {
+        if (!DECL_ARTIFICIAL (decl))
+            warning (OPT_Wmudflap,
+                    "mudflap cannot track %qE in stub function",
+                    DECL_NAME (decl));
+    }
+    else
+    {
+        //gsi_insert_before (&initially_stmts, register_fncall, GSI_SAME_STMT);
+        gsi_insert_before (&initially_stmts, init_fncall_front, GSI_SAME_STMT);
+        gsi_insert_before (&initially_stmts, init_fncall_rear, GSI_SAME_STMT);
+
+        /* Accumulate the FINALLY piece.  */
+        //gimple_seq_add_stmt (&finally_stmts, unregister_fncall);
+        gimple_seq_add_stmt (&finally_stmts, uninit_fncall_front);
+        gimple_seq_add_stmt (&finally_stmts, uninit_fncall_rear);
+
+        // TODO what about ensure_sframe_bitmap()?
+    }
+    mf_mark (decl);
         }
 
-      decl = DECL_CHAIN (decl);
+      decl = DECL_CHAIN (decl); // TODO figure out how to nullify decl so that its removed from the code
     }
 
   /* Actually, (initially_stmts!=NULL) <=> (finally_stmts!=NULL) */
   if (finally_stmts != NULL)
-    {
+  {
       gimple stmt = gimple_build_try (seq, finally_stmts, GIMPLE_TRY_FINALLY);
       gimple_seq new_seq = gimple_seq_alloc ();
 
       gimple_seq_add_stmt (&new_seq, stmt);
       return new_seq;
-    }
-   else
-    return seq;
+  }
+  else
+      return seq;
 }
 
 
 /* Process every variable mentioned in BIND_EXPRs.  */
-static tree
+    static tree
 mx_xfn_xform_decls (gimple_stmt_iterator *gsi,
-		    bool *handled_operands_p ATTRIBUTE_UNUSED,
-		    struct walk_stmt_info *wi)
+        bool *handled_operands_p ATTRIBUTE_UNUSED,
+        struct walk_stmt_info *wi)
 {
-  struct mf_xform_decls_data *d = (struct mf_xform_decls_data *) wi->info;
-  gimple stmt = gsi_stmt (*gsi);
+    struct mf_xform_decls_data *d = (struct mf_xform_decls_data *) wi->info;
+    gimple stmt = gsi_stmt (*gsi);
 
-  switch (gimple_code (stmt))
+    switch (gimple_code (stmt))
     {
-    case GIMPLE_BIND:
-      {
-        /* Process function parameters now (but only once).  */
-	if (d->param_decls)
-	  {
-	    gimple_bind_set_body (stmt,
-				  mx_register_decls (d->param_decls,
-						     gimple_bind_body (stmt),
-						     gimple_location (stmt)));
-	    d->param_decls = NULL_TREE;
-	  }
+        case GIMPLE_BIND:
+            {
+                /* Process function parameters now (but only once).  */
+                if (d->param_decls)
+                {
+                    gimple_bind_set_body (stmt,
+                            mx_register_decls (d->param_decls,
+                                gimple_bind_body (stmt),
+                                gimple_location (stmt)));
+                    d->param_decls = NULL_TREE;
+                }
 
-	gimple_bind_set_body (stmt,
-			      mx_register_decls (gimple_bind_vars (stmt),
+                gimple_bind_set_body (stmt,
+                        mx_register_decls (gimple_bind_vars (stmt),
 						 gimple_bind_body (stmt),
 						 gimple_location (stmt)));
       }
