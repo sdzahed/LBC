@@ -1037,6 +1037,7 @@ struct mf_xform_decls_data
     gimple_seq
 mx_register_decls (tree decl, gimple_seq seq, location_t location)
 {
+    tree prev_decl = NULL_TREE;
     gimple_seq finally_stmts = NULL;
     gimple_stmt_iterator initially_stmts = gsi_start (seq);
 
@@ -1069,9 +1070,9 @@ mx_register_decls (tree decl, gimple_seq seq, location_t location)
                     ARRAY_TYPE, get_identifier ("rz_front"), rz_array);
             /* TODO we would need another one for orig_var? Question: how do we copy
              *      decl and remove it from original location?
-             * tree orig_var = build_decl (UNKNOWN_LOCATION,
-             *                     TREE_CODE(decl), get_identifier("orig_var"), decl);
              */
+            tree orig_var = build_decl (UNKNOWN_LOCATION,
+                                 TREE_CODE(decl), get_identifier("orig_var"), decl);
             tree fieldrear = build_decl (UNKNOWN_LOCATION,
                     ARRAY_TYPE, get_identifier ("rz_rear"), rz_array);
 
@@ -1088,6 +1089,13 @@ mx_register_decls (tree decl, gimple_seq seq, location_t location)
             char *buf = strcat("rz_", get_name(decl)); //TODO will this give orig variable name?
             TYPE_NAME (struct_type) = get_identifier (buf);
             layout_type (struct_type);
+
+            // Append the new struct to decls in scope. Still need to figure out how to remove decl.
+            // TODO not sure about the following two statements.
+            DECL_ARTIFICIAL(struct_type) = 1;
+            // Do we need pushdecl?
+            // lang_hooks.decls.pushdecl(struct_type);
+            gimple_bind_append_vars(seq, struct_type);
 
             tree size = NULL_TREE;
             gimple uninit_fncall_front, uninit_fncall_rear, init_fncall_front, init_fncall_rear;
@@ -1140,8 +1148,15 @@ mx_register_decls (tree decl, gimple_seq seq, location_t location)
                 // TODO what about ensure_sframe_bitmap()?
             }
             mf_mark (decl);
+
+            // TODO would unlinking be enough or de we need to do gimple_bind_set_vars()?
+            if (prev_decl != TREE_NULL){
+                DECL_CHAIN(prev_decl) = DECL_CHAIN(decl);
+                decl = prev_decl;
+            }
         }
 
+        prev_decl = decl;
         decl = DECL_CHAIN (decl); // TODO figure out how to nullify decl so that its removed from the code
     }
 
