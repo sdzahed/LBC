@@ -66,7 +66,7 @@ static unsigned int execute_mudflap_function_ops (void);
 static void mf_xform_decls (gimple_seq, tree);
 static tree mx_xfn_xform_decls (gimple_stmt_iterator *, bool *,
 				struct walk_stmt_info *);
-static gimple_seq mx_register_decls (tree, gimple_seq, location_t);
+static gimple_seq mx_register_decls (tree, gimple_seq, gimple, location_t, bool);
 static unsigned int execute_mudflap_function_decls (void);
 
 
@@ -350,12 +350,6 @@ void
 mudflap_init (void)
 {
   static bool done = false;
-  tree mf_const_string_type;
-  tree mf_cache_array_type;
-  tree mf_check_register_fntype;
-  tree mf_unregister_fntype;
-  tree mf_init_fntype;
-  tree mf_set_options_fntype;
 
   tree lbc_init_uninit_rz_fntype;
   tree lbc_ensure_sframe_fntype;
@@ -1034,12 +1028,13 @@ struct mf_xform_decls_data
    _DECLs if appropriate.  Arrange to call the __mf_register function
    now, and the __mf_unregister function later for each.  Return the
    gimple sequence after synthesis.  */
-    gimple_seq
-mx_register_decls (tree decl, gimple_seq seq, location_t location, bool func_args)
+gimple_seq
+mx_register_decls (tree decl, gimple_seq seq, gimple stmt, location_t location, bool func_args)
 {
     tree prev_decl = NULL_TREE;
     gimple_seq finally_stmts = NULL;
     gimple_stmt_iterator initially_stmts = gsi_start (seq);
+    char buf[50];
 
     while (decl != NULL_TREE)
     {
@@ -1086,7 +1081,8 @@ mx_register_decls (tree decl, gimple_seq seq, location_t location, bool func_arg
             DECL_CHAIN (orig_var) = fieldrear;
 
             TYPE_FIELDS (struct_type) = fieldfront;
-            char *buf = strcat("rz_", get_name(decl)); //TODO will this give orig variable name?
+            strcpy(buf, "rz_");
+            strcat(buf, get_name(decl)); //TODO will this give orig variable name?
             TYPE_NAME (struct_type) = get_identifier (buf);
             layout_type (struct_type);
 
@@ -1095,7 +1091,7 @@ mx_register_decls (tree decl, gimple_seq seq, location_t location, bool func_arg
             DECL_ARTIFICIAL(struct_type) = 1;
             // Do we need pushdecl?
             // lang_hooks.decls.pushdecl(struct_type);
-            gimple_bind_append_vars(seq, struct_type);
+            gimple_bind_append_vars(stmt, struct_type);
 
             tree size = NULL_TREE;
             gimple uninit_fncall_front, uninit_fncall_rear, init_fncall_front, init_fncall_rear;
@@ -1150,7 +1146,7 @@ mx_register_decls (tree decl, gimple_seq seq, location_t location, bool func_arg
             mf_mark (decl);
 
             // TODO would unlinking be enough or de we need to do gimple_bind_set_vars()?
-            if (prev_decl != TREE_NULL && !func_args){
+            if (prev_decl != NULL_TREE && !func_args){
                 DECL_CHAIN(prev_decl) = DECL_CHAIN(decl);
                 decl = prev_decl;
             }
@@ -1175,7 +1171,7 @@ mx_register_decls (tree decl, gimple_seq seq, location_t location, bool func_arg
 
 
 /* Process every variable mentioned in BIND_EXPRs.  */
-    static tree
+static tree
 mx_xfn_xform_decls (gimple_stmt_iterator *gsi,
         bool *handled_operands_p ATTRIBUTE_UNUSED,
         struct walk_stmt_info *wi)
@@ -1192,15 +1188,15 @@ mx_xfn_xform_decls (gimple_stmt_iterator *gsi,
                 {
                     gimple_bind_set_body (stmt,
                             mx_register_decls (d->param_decls,
-                                gimple_bind_body (stmt),
-                                gimple_location (stmt)), 1);
+                                gimple_bind_body (stmt), stmt,
+                                gimple_location (stmt), 1));
                     d->param_decls = NULL_TREE;
                 }
 
                 gimple_bind_set_body (stmt,
                         mx_register_decls (gimple_bind_vars (stmt),
-						 gimple_bind_body (stmt),
-						 gimple_location (stmt)), 0);
+						 gimple_bind_body (stmt), stmt,
+						 gimple_location (stmt), 0));
       }
       break;
 
