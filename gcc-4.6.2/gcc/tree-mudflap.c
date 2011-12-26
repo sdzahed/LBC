@@ -1035,7 +1035,7 @@ struct mf_xform_decls_data
    now, and the __mf_unregister function later for each.  Return the
    gimple sequence after synthesis.  */
     gimple_seq
-mx_register_decls (tree decl, gimple_seq seq, location_t location)
+mx_register_decls (tree decl, gimple_seq seq, location_t location, bool func_args)
 {
     tree prev_decl = NULL_TREE;
     gimple_seq finally_stmts = NULL;
@@ -1076,7 +1076,7 @@ mx_register_decls (tree decl, gimple_seq seq, location_t location)
             tree fieldrear = build_decl (UNKNOWN_LOCATION,
                     ARRAY_TYPE, get_identifier ("rz_rear"), rz_array);
 
-            tree struct_type = make_node (RECORD_TYPE);
+            tree struct_type = mf_mark(make_node (RECORD_TYPE));
 
             // TODO changes here. verify. orig_var needs to be inserted above.
             DECL_CONTEXT (fieldfront) = struct_type;
@@ -1150,7 +1150,7 @@ mx_register_decls (tree decl, gimple_seq seq, location_t location)
             mf_mark (decl);
 
             // TODO would unlinking be enough or de we need to do gimple_bind_set_vars()?
-            if (prev_decl != TREE_NULL){
+            if (prev_decl != TREE_NULL && !func_args){
                 DECL_CHAIN(prev_decl) = DECL_CHAIN(decl);
                 decl = prev_decl;
             }
@@ -1193,14 +1193,14 @@ mx_xfn_xform_decls (gimple_stmt_iterator *gsi,
                     gimple_bind_set_body (stmt,
                             mx_register_decls (d->param_decls,
                                 gimple_bind_body (stmt),
-                                gimple_location (stmt)));
+                                gimple_location (stmt)), 1);
                     d->param_decls = NULL_TREE;
                 }
 
                 gimple_bind_set_body (stmt,
                         mx_register_decls (gimple_bind_vars (stmt),
 						 gimple_bind_body (stmt),
-						 gimple_location (stmt)));
+						 gimple_location (stmt)), 0);
       }
       break;
 
