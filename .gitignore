@@ -3,3 +3,17 @@ gcc-4.6.2/cscope.in.out
 gcc-4.6.2/cscope.out
 gcc-4.6.2/cscope.po.out
 *.swp
+gcc-4.6.2/Makefile
+gcc-4.6.2/build-i686-pc-linux-gnu/
+gcc-4.6.2/compare
+gcc-4.6.2/config.log
+gcc-4.6.2/config.status
+gcc-4.6.2/host-i686-pc-linux-gnu/
+gcc-4.6.2/i686-pc-linux-gnu/
+gcc-4.6.2/prev-i686-pc-linux-gnu/
+gcc-4.6.2/serdep.tmp
+gcc-4.6.2/stage1-i686-pc-linux-gnu/
+gcc-4.6.2/stage_current
+gcc-4.6.2/stage_final
+gcc-4.6.2/stage_last
+

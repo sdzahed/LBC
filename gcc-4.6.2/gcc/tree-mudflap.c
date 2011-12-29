@@ -397,6 +397,8 @@ static unsigned int
 execute_mudflap_function_ops (void)
 {
   struct gimplify_ctx gctx;
+  printf("Zahed: entering mudflap pass2\n");
+  return 0;
 
   /* Don't instrument functions such as the synthetic constructor
      built during mudflap_finish_file.  */
@@ -1023,6 +1025,71 @@ struct mf_xform_decls_data
   tree param_decls;
 };
 
+static tree
+create_struct_type(tree decl)
+{
+    char typename[50];
+    tree array_idx =  build_index_type (size_int (6U)); // TODO the size needs to be computed on the fly. How?
+    tree rz_array = build_array_type (integer_type_node, array_idx);
+
+    tree fieldfront = build_decl (UNKNOWN_LOCATION,
+            FIELD_DECL, get_identifier ("rz_front"), rz_array);
+    /* TODO we would need another one for orig_var? Question: how do we copy
+     *      decl and remove it from original location?
+     */
+    tree orig_var = build_decl (UNKNOWN_LOCATION,
+            FIELD_DECL, get_identifier("orig_var"), TREE_TYPE(decl));
+    tree fieldrear = build_decl (UNKNOWN_LOCATION,
+            FIELD_DECL, get_identifier ("rz_rear"), rz_array);
+
+    tree struct_type = mf_mark(make_node (RECORD_TYPE));
+
+    // TODO changes here. verify. orig_var needs to be inserted above.
+    DECL_CONTEXT (fieldfront) = struct_type;
+    DECL_CONTEXT (orig_var) = struct_type; // Look at comments above
+    DECL_CONTEXT (fieldrear) = struct_type;
+    DECL_CHAIN (fieldfront) = orig_var;
+    DECL_CHAIN (orig_var) = fieldrear;
+
+    TYPE_FIELDS (struct_type) = fieldfront;
+    strcpy(typename, "rz_");
+    strcat(typename, get_name(decl));
+    strcat(typename, "_type");
+    TYPE_NAME (struct_type) = get_identifier (typename);
+    layout_type (struct_type);
+
+    return struct_type;
+}
+
+static tree
+create_struct_var (tree type, tree decl, location_t location)
+{
+    char typename[50];
+    tree tmp_var;
+
+    strcpy(typename, "rz_");
+    strcat(typename, get_name(decl));
+
+    tmp_var = build_decl (location,
+            VAR_DECL, get_identifier(typename),
+            type);
+
+    /* The variable was declared by the compiler.  */
+    DECL_ARTIFICIAL (tmp_var) = 1;
+    /* And we don't want debug info for it.  */
+    DECL_IGNORED_P (tmp_var) = 1;
+
+    /* Make the variable writable.  */
+    TREE_READONLY (tmp_var) = 0;
+
+    DECL_EXTERNAL (tmp_var) = 0;
+    TREE_STATIC (tmp_var) = 0;
+    TREE_USED (tmp_var) = 1;
+
+    return tmp_var;
+}
+
+
 
 /* Synthesize a CALL_EXPR and a TRY_FINALLY_EXPR, for this chain of
    _DECLs if appropriate.  Arrange to call the __mf_register function
@@ -1034,7 +1101,6 @@ mx_register_decls (tree decl, gimple_seq seq, gimple stmt, location_t location, 
     tree prev_decl = NULL_TREE;
     gimple_seq finally_stmts = NULL;
     gimple_stmt_iterator initially_stmts = gsi_start (seq);
-    char buf[50];
 
     while (decl != NULL_TREE)
     {
@@ -1053,45 +1119,17 @@ mx_register_decls (tree decl, gimple_seq seq, gimple stmt, location_t location, 
                };
              */
 
-            /* TODO Shouldn't we skip safe declarations. We need to only
-               instrument unsafe declarations like struct, array etc.
-               Look at funcs like is_gimple_address etc.
-             */
-
-            tree array_idx =  build_index_type (size_int (6U)); // TODO the size needs to be computed on the fly. How?
-            tree rz_array = build_array_type (integer_type_node, array_idx);
-
-            tree fieldfront = build_decl (UNKNOWN_LOCATION,
-                    ARRAY_TYPE, get_identifier ("rz_front"), rz_array);
-            /* TODO we would need another one for orig_var? Question: how do we copy
-             *      decl and remove it from original location?
-             */
-            tree orig_var = build_decl (UNKNOWN_LOCATION,
-                                 TREE_CODE(decl), get_identifier("orig_var"), TREE_TYPE(decl));
-            tree fieldrear = build_decl (UNKNOWN_LOCATION,
-                    ARRAY_TYPE, get_identifier ("rz_rear"), rz_array);
-
-            tree struct_type = mf_mark(make_node (RECORD_TYPE));
-
-            // TODO changes here. verify. orig_var needs to be inserted above.
-            DECL_CONTEXT (fieldfront) = struct_type;
-            DECL_CONTEXT (orig_var) = struct_type; // Look at comments above
-            DECL_CONTEXT (fieldrear) = struct_type;
-            DECL_CHAIN (fieldfront) = orig_var;
-            DECL_CHAIN (orig_var) = fieldrear;
-
-            TYPE_FIELDS (struct_type) = fieldfront;
-            strcpy(buf, "rz_");
-            strcat(buf, get_name(decl)); //TODO will this give orig variable name?
-            TYPE_NAME (struct_type) = get_identifier (buf);
-            layout_type (struct_type);
+            tree struct_type = create_struct_type(decl);
 
             // Append the new struct to decls in scope. Still need to figure out how to remove decl.
-            // TODO not sure about the following two statements.
-            DECL_ARTIFICIAL(struct_type) = 1;
-            // Do we need pushdecl?
-            // lang_hooks.decls.pushdecl(struct_type);
-            gimple_bind_append_vars(stmt, struct_type);
+            tree struct_var = create_struct_var(struct_type, decl, location);
+            // gimple_bind_append_vars(stmt, struct_type);
+            declare_vars(struct_var, stmt, 0);
+
+            // Zahed debug
+            // printf("Zahed: Printing gimple statement\n");
+            //debug_gimple_stmt(decl);
+            //debug_gimple_stmt(struct_type);
 
             tree size = NULL_TREE;
             gimple uninit_fncall_front, uninit_fncall_rear, init_fncall_front, init_fncall_rear;
@@ -1106,9 +1144,16 @@ mx_register_decls (tree decl, gimple_seq seq, gimple stmt, location_t location, 
             // Need to change mf_mark
             // TODO first paramter is void * pointer to the rz field (front or rear). not struct type.
             //      Moreover, there are only two parameters, unlike mudflap's calls.
-            fncall_param_front = mf_mark (build1 (ADDR_EXPR, ptr_type_node, fieldfront));
+            // fncall_param_front = mf_mark (build1 (ADDR_EXPR, ptr_type_node, fieldfront));
+            // fncall_param_rear = mf_mark (build1 (ADDR_EXPR, ptr_type_node, fieldrear));
+            tree rz_front = TYPE_FIELDS(struct_type);
+            tree rz_rear = DECL_CHAIN(DECL_CHAIN(TYPE_FIELDS (struct_type)));
+            fncall_param_front = mf_mark (build3 (COMPONENT_REF, TREE_TYPE(rz_front),
+                                      struct_var, rz_front, NULL_TREE));
+            fncall_param_rear = mf_mark (build3 (COMPONENT_REF, TREE_TYPE(rz_rear),
+                                      struct_var, rz_rear, NULL_TREE));
+
             uninit_fncall_front = gimple_build_call (lbc_uninit_front_rz_fndecl, 2, fncall_param_front, size);
-            fncall_param_rear = mf_mark (build1 (ADDR_EXPR, ptr_type_node, fieldrear));
             uninit_fncall_rear = gimple_build_call (lbc_uninit_rear_rz_fndecl, 2, fncall_param_rear, size);
 
             init_fncall_front = gimple_build_call (lbc_init_front_rz_fndecl, 2, fncall_param_front, size);
@@ -1341,6 +1386,8 @@ mudflap_enqueue_constant (tree obj)
 void
 mudflap_finish_file (void)
 {
+    printf("Zahed: Entering finish file\n");
+    return;
   tree ctor_statements = NULL_TREE;
 
   /* No need to continue when there were errors.  */
