@@ -1204,10 +1204,11 @@ mx_register_decls (tree decl, gimple_seq seq, gimple stmt, location_t location, 
     /* Actually, (initially_stmts!=NULL) <=> (finally_stmts!=NULL) */
     if (finally_stmts != NULL)
     {
-        // Well what happens with nested blocks. We would need to handle that.
-        if (!func_args){
+        if (!func_args && ! mf_marked_p (current_function_decl)){
             tree ensure_fn_call = gimple_build_call (lbc_ensure_sframe_bitmap_fndecl, 0);
             gsi_insert_before (&initially_stmts, ensure_fn_call, GSI_SAME_STMT);
+            // Will this handle nested scopes? I hope so :)
+            mf_mark(current_function_decl);
         }
         gimple stmt = gimple_build_try (seq, finally_stmts, GIMPLE_TRY_FINALLY);
         gimple_seq new_seq = gimple_seq_alloc ();
