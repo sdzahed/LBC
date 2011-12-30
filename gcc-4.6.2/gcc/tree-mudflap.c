@@ -302,6 +302,9 @@ static GTY (()) tree lbc_uninit_rear_rz_fndecl;
 /* void ensure_sframe_bitmap() */
 static GTY (()) tree lbc_ensure_sframe_bitmap_fndecl;
 
+/* void ensure_sframe_bitmap() */
+static GTY (()) tree lbc_is_char_red_fndecl;
+
 /* Helper for mudflap_init: construct a decl with the given category,
    name, and type, mark it an external reference, and pushdecl it.  */
 static inline tree
@@ -353,6 +356,7 @@ mudflap_init (void)
 
   tree lbc_init_uninit_rz_fntype;
   tree lbc_ensure_sframe_fntype;
+  tree lbc_is_char_red_fntype;
 
   if (done)
     return;
@@ -365,6 +369,10 @@ mudflap_init (void)
     build_function_type_list (void_type_node, void_type_node,
                                 NULL_TREE);
 
+  lbc_is_char_red_fntype =
+    build_function_type_list (void_type_node, unsigned_type_node,
+				unsigned_type_node, ptr_type_node, NULL_TREE);
+
   lbc_init_front_rz_fndecl = mf_make_builtin (FUNCTION_DECL, "init_front_redzone",
                                     lbc_init_uninit_rz_fntype);
   lbc_uninit_front_rz_fndecl = mf_make_builtin (FUNCTION_DECL, "uninit_front_redzone",
@@ -375,7 +383,8 @@ mudflap_init (void)
                                     lbc_init_uninit_rz_fntype);
   lbc_ensure_sframe_bitmap_fndecl = mf_make_builtin (FUNCTION_DECL, "ensure_sframe_bitmap",
                                     lbc_ensure_sframe_fntype);
-}
+  lbc_is_char_red_fndecl = mf_make_builtin (FUNCTION_DECL, "is_char_red",
+				    lbc_is_char_red_fntype);}
 
 
 /* ------------------------------------------------------------------------ */
@@ -398,7 +407,7 @@ execute_mudflap_function_ops (void)
 {
   struct gimplify_ctx gctx;
   printf("Zahed: entering mudflap pass2\n");
-  return 0;
+//  return 0;
 
   /* Don't instrument functions such as the synthetic constructor
      built during mudflap_finish_file.  */
@@ -409,13 +418,13 @@ execute_mudflap_function_ops (void)
   push_gimplify_context (&gctx);
 
   /* In multithreaded mode, don't cache the lookup cache parameters.  */
-  if (! flag_mudflap_threads)
-    mf_decl_cache_locals ();
+  //if (! flag_mudflap_threads)
+   // mf_decl_cache_locals ();
 
   mf_xform_statements ();
 
-  if (! flag_mudflap_threads)
-    mf_decl_clear_locals ();
+  //if (! flag_mudflap_threads)
+   // mf_decl_clear_locals ();
 
   pop_gimplify_context (NULL);
   return 0;
@@ -667,6 +676,8 @@ mf_build_check_statement_for (tree base, tree limit,
   v = force_gimple_operand (v, &stmts, true, NULL_TREE);
   gimple_seq_add_seq (&seq, stmts);
   g = gimple_build_call (mf_check_fndecl, 4, mf_base, v, dirflag, u);
+  //g = gimple_build_call (lbc_is_char_red_fndecl, 3, mf_base, v, dirflag, u); 
+
   gimple_seq_add_stmt (&seq, g);
 
   if (! flag_mudflap_threads)
@@ -721,23 +732,60 @@ static void
 mf_xform_derefs_1 (gimple_stmt_iterator *iter, tree *tp,
                    location_t location, tree dirflag)
 {
-  tree type, base, limit, addr, size, t;
+	char tree_name[50], subtreename[50];
+	if(get_name(*tp)){
+		strcpy(tree_name, get_name(*tp));
+		printf("Ram: Inside mf_xform_derefs_1 for : %s\n", tree_name);
+		strcpy(subtreename, "rz_");
+		strcat(subtreename, tree_name);
+	}
+	tree type, base, limit, addr, size, t;
 
-  /* Don't instrument read operations.  */
-  if (dirflag == integer_zero_node && flag_mudflap_ignore_reads)
-    return;
+	/* Don't instrument read operations.  */
+	if (dirflag == integer_zero_node && flag_mudflap_ignore_reads)
+		return;
 
-  /* Don't instrument marked nodes.  */
-  if (mf_marked_p (*tp))
-    return;
+	printf("TREE_CODE(t) = %s, mf_decl_eligible_p : %d\n", 
+		tree_code_name[(int)TREE_CODE(*tp)], mf_decl_eligible_p(*tp));
 
-  t = *tp;
-  type = TREE_TYPE (t);
+	if(TREE_CODE(*tp) == ADDR_EXPR){//Currently iterating only one level
+		tree temp = TREE_OPERAND(*tp, 0);
+		printf("Inside ADDR_EXPR check, sub-tree code : %s, mf_decl_eligible_p : %d\n",
+			tree_code_name[(int)TREE_CODE(temp)], mf_decl_eligible_p(temp));
 
-  if (type == error_mark_node)
-    return;
+		//This gives NULL. Need to find how to get actual struct
+		#if 0
+		tree tree_struct = identifier_global_value(get_identifier(subtreename));
+		TREE_OPERAND (*tp, 0) = fold_convert (TREE_TYPE(tree_struct), temp);
+		if(chain_index(1, tree_struct) == NULL_TREE){
+			printf("Getting index failed from %s %s\n", 
+				tree_code_name[(int)TREE_CODE(tree_struct)], subtreename);
+		}
+		else
+			printf("Chain index obtained from %s %s\n", 
+				tree_code_name[(int)TREE_CODE(tree_struct)], subtreename);
+		#endif
+	}
+	return;
 
-  size = TYPE_SIZE_UNIT (type);
+// Original mudflap code starts here
+	if (type == error_mark_node)
+		return;
+
+	t = *tp;
+	type = TREE_TYPE (t);
+
+	size = TYPE_SIZE_UNIT (type);
+
+	/* Don't instrument marked nodes.  */
+	if (mf_marked_p (t)){
+		printf("Returning Here - 1\n");
+		//check if the variable has a struct defined in pass1
+		//printf();
+		return;
+	}
+
+	printf("Ram: Inside mf_xform_derefs_1 - 1\n");
 
   switch (TREE_CODE (t))
     {
@@ -952,6 +1000,7 @@ mf_xform_statements (void)
           switch (gimple_code (s))
             {
             case GIMPLE_ASSIGN:
+		printf("******** Gimlpe Assign ***********\n");
 	      mf_xform_derefs_1 (&i, gimple_assign_lhs_ptr (s),
 		  		 gimple_location (s), integer_one_node);
 	      mf_xform_derefs_1 (&i, gimple_assign_rhs1_ptr (s),
