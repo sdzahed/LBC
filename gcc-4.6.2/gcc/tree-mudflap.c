@@ -1028,7 +1028,7 @@ struct mf_xform_decls_data
 static tree
 create_struct_type(tree decl)
 {
-    char typename[50];
+    char type_name[50];
     tree array_idx =  build_index_type (size_int (6U)); // TODO the size needs to be computed on the fly. How?
     tree rz_array = build_array_type (integer_type_node, array_idx);
 
@@ -1052,10 +1052,10 @@ create_struct_type(tree decl)
     DECL_CHAIN (orig_var) = fieldrear;
 
     TYPE_FIELDS (struct_type) = fieldfront;
-    strcpy(typename, "rz_");
-    strcat(typename, get_name(decl));
-    strcat(typename, "_type");
-    TYPE_NAME (struct_type) = get_identifier (typename);
+    strcpy(type_name, "rz_");
+    strcat(type_name, get_name(decl));
+    strcat(type_name, "_type");
+    TYPE_NAME (struct_type) = get_identifier (type_name);
     layout_type (struct_type);
 
     return struct_type;
@@ -1064,14 +1064,14 @@ create_struct_type(tree decl)
 static tree
 create_struct_var (tree type, tree decl, location_t location)
 {
-    char typename[50];
+    char type_name[50];
     tree tmp_var;
 
-    strcpy(typename, "rz_");
-    strcat(typename, get_name(decl));
+    strcpy(type_name, "rz_");
+    strcat(type_name, get_name(decl));
 
     tmp_var = build_decl (location,
-            VAR_DECL, get_identifier(typename),
+            VAR_DECL, get_identifier(type_name),
             type);
 
     /* The variable was declared by the compiler.  */
@@ -1126,13 +1126,9 @@ mx_register_decls (tree decl, gimple_seq seq, gimple stmt, location_t location, 
             // gimple_bind_append_vars(stmt, struct_type);
             declare_vars(struct_var, stmt, 0);
 
-            // Zahed debug
-            // printf("Zahed: Printing gimple statement\n");
-            //debug_gimple_stmt(decl);
-            //debug_gimple_stmt(struct_type);
-
             tree size = NULL_TREE;
-            gimple uninit_fncall_front, uninit_fncall_rear, init_fncall_front, init_fncall_rear;
+            gimple uninit_fncall_front, uninit_fncall_rear, init_fncall_front, \
+                            init_fncall_rear, init_assign_stmt;
             tree fncall_param_front, fncall_param_rear;
 
             /* Variable-sized objects should have sizes already been
@@ -1159,15 +1155,24 @@ mx_register_decls (tree decl, gimple_seq seq, gimple stmt, location_t location, 
             init_fncall_front = gimple_build_call (lbc_init_front_rz_fndecl, 2, fncall_param_front, size);
             init_fncall_rear = gimple_build_call (lbc_init_rear_rz_fndecl, 2, fncall_param_rear, size);
 
-            /* Accumulate the two calls.  */
-            //gimple_set_location (register_fncall, location);
-            //gimple_set_location (unregister_fncall, location);
             gimple_set_location (init_fncall_front, location);
             gimple_set_location (init_fncall_rear, location);
             gimple_set_location (uninit_fncall_front, location);
             gimple_set_location (uninit_fncall_rear, location);
 
-            /* Add the __mf_register call at the current appending point.  */
+            // Handle the initializer in the declaration
+            if (DECL_INITIAL(decl) != NULL_TREE){
+                // This code never seems to be getting executed for somehting like int i = 10;
+                // I have no idea why? But looking at the tree dump, seems like its because
+                // by the time it gets here, these kind of statements are split into two statements
+                // as int i; and i = 10; respectively. I am leaving it in just in case.
+                tree orig_var_type = DECL_CHAIN(TYPE_FIELDS (struct_type));
+                tree orig_var_lval = mf_mark (build3 (COMPONENT_REF, TREE_TYPE(orig_var_type),
+                                        struct_var, orig_var_type, NULL_TREE));
+                init_assign_stmt = gimple_build_assign(orig_var_lval, DECL_INITIAL(decl));
+                gimple_set_location (init_assign_stmt, location);
+            }
+
             if (gsi_end_p (initially_stmts))
             {
                 if (!DECL_ARTIFICIAL (decl))
@@ -1177,6 +1182,10 @@ mx_register_decls (tree decl, gimple_seq seq, gimple stmt, location_t location, 
             }
             else
             {
+                // Insert the declaration initializer
+                if (DECL_INITIAL(decl) != NULL_TREE)
+                    gsi_insert_before (&initially_stmts, init_assign_stmt, GSI_SAME_STMT);
+
                 //gsi_insert_before (&initially_stmts, register_fncall, GSI_SAME_STMT);
                 gsi_insert_before (&initially_stmts, init_fncall_front, GSI_SAME_STMT);
                 gsi_insert_before (&initially_stmts, init_fncall_rear, GSI_SAME_STMT);
@@ -1197,18 +1206,19 @@ mx_register_decls (tree decl, gimple_seq seq, gimple stmt, location_t location, 
             }
         }
 
+        // This does not seem to be working. Need to figure out how to delete
+        // the original declaration.
         prev_decl = decl;
-        decl = DECL_CHAIN (decl); // TODO figure out how to nullify decl so that its removed from the code
+        decl = DECL_CHAIN (decl);
     }
 
     /* Actually, (initially_stmts!=NULL) <=> (finally_stmts!=NULL) */
     if (finally_stmts != NULL)
     {
-        if (!func_args && ! mf_marked_p (current_function_decl)){
-            tree ensure_fn_call = gimple_build_call (lbc_ensure_sframe_bitmap_fndecl, 0);
+        if (!func_args){
+            gimple ensure_fn_call = gimple_build_call (lbc_ensure_sframe_bitmap_fndecl, 0);
+            gimple_set_location (ensure_fn_call, location);
             gsi_insert_before (&initially_stmts, ensure_fn_call, GSI_SAME_STMT);
-            // Will this handle nested scopes? I hope so :)
-            mf_mark(current_function_decl);
         }
         gimple stmt = gimple_build_try (seq, finally_stmts, GIMPLE_TRY_FINALLY);
         gimple_seq new_seq = gimple_seq_alloc ();
