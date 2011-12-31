@@ -302,7 +302,7 @@ static GTY (()) tree lbc_uninit_rear_rz_fndecl;
 /* void ensure_sframe_bitmap() */
 static GTY (()) tree lbc_ensure_sframe_bitmap_fndecl;
 
-/* void ensure_sframe_bitmap() */
+/* void is_char_red (unsigned int value,unsigned int orig_value_size, const void* ptr)*/
 static GTY (()) tree lbc_is_char_red_fndecl;
 
 /* Helper for mudflap_init: construct a decl with the given category,
@@ -357,10 +357,13 @@ mudflap_init (void)
   tree lbc_init_uninit_rz_fntype;
   tree lbc_ensure_sframe_fntype;
   tree lbc_is_char_red_fntype;
+  tree lbc_const_void_ptr_type;
 
   if (done)
     return;
   done = true;
+
+  lbc_const_void_ptr_type = build_qualified_type (ptr_type_node, TYPE_QUAL_CONST);
 
   lbc_init_uninit_rz_fntype =
     build_function_type_list (void_type_node, ptr_type_node,
@@ -371,7 +374,7 @@ mudflap_init (void)
 
   lbc_is_char_red_fntype =
     build_function_type_list (void_type_node, unsigned_type_node,
-				unsigned_type_node, ptr_type_node, NULL_TREE);
+				unsigned_type_node, lbc_const_void_ptr_type, NULL_TREE);
 
   lbc_init_front_rz_fndecl = mf_make_builtin (FUNCTION_DECL, "init_front_redzone",
                                     lbc_init_uninit_rz_fntype);
@@ -384,7 +387,8 @@ mudflap_init (void)
   lbc_ensure_sframe_bitmap_fndecl = mf_make_builtin (FUNCTION_DECL, "ensure_sframe_bitmap",
                                     lbc_ensure_sframe_fntype);
   lbc_is_char_red_fndecl = mf_make_builtin (FUNCTION_DECL, "is_char_red",
-				    lbc_is_char_red_fntype);}
+				    lbc_is_char_red_fntype);
+}
 
 
 /* ------------------------------------------------------------------------ */
@@ -407,7 +411,6 @@ execute_mudflap_function_ops (void)
 {
   struct gimplify_ctx gctx;
   printf("Zahed: entering mudflap pass2\n");
-//  return 0;
 
   /* Don't instrument functions such as the synthetic constructor
      built during mudflap_finish_file.  */
@@ -417,14 +420,7 @@ execute_mudflap_function_ops (void)
 
   push_gimplify_context (&gctx);
 
-  /* In multithreaded mode, don't cache the lookup cache parameters.  */
-  //if (! flag_mudflap_threads)
-   // mf_decl_cache_locals ();
-
   mf_xform_statements ();
-
-  //if (! flag_mudflap_threads)
-   // mf_decl_clear_locals ();
 
   pop_gimplify_context (NULL);
   return 0;
