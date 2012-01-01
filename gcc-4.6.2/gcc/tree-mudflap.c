@@ -68,6 +68,7 @@ static tree mx_xfn_xform_decls (gimple_stmt_iterator *, bool *,
 				struct walk_stmt_info *);
 static gimple_seq mx_register_decls (tree, gimple_seq, gimple, location_t, bool);
 static unsigned int execute_mudflap_function_decls (void);
+static tree create_struct_type(tree decl);
 
 
 /* ------------------------------------------------------------------------ */
@@ -367,7 +368,7 @@ mudflap_init (void)
 
   lbc_init_uninit_rz_fntype =
     build_function_type_list (void_type_node, ptr_type_node,
-                                unsigned_type_node, NULL_TREE);
+								unsigned_type_node, NULL_TREE);
   lbc_ensure_sframe_fntype =
     build_function_type_list (void_type_node, void_type_node,
                                 NULL_TREE);
@@ -723,18 +724,21 @@ mf_decl_eligible_p (tree decl)
 	  && !DECL_HAS_VALUE_EXPR_P (decl));
 }
 
+tree get_instrumented_type(tree temp, char *instr_struct_type_name)
+{
+	char tree_name[50];
+	strcpy(tree_name, get_name(temp));
+	strcpy(instr_struct_type_name, "rz_");
+	strcat(instr_struct_type_name, tree_name);
+	printf("get_instrumented_type for %s\n", instr_struct_type_name);
+	return TYPE_NAME(get_identifier(instr_struct_type_name));
+}
 
 static void
 mf_xform_derefs_1 (gimple_stmt_iterator *iter, tree *tp,
                    location_t location, tree dirflag)
 {
-	char tree_name[50], subtreename[50];
-	if(get_name(*tp)){
-		strcpy(tree_name, get_name(*tp));
-		printf("Ram: Inside mf_xform_derefs_1 for : %s\n", tree_name);
-		strcpy(subtreename, "rz_");
-		strcat(subtreename, tree_name);
-	}
+	char tree_name[50], instr_tree_name[50] = {0,};
 	tree type, base, limit, addr, size, t;
 
 	/* Don't instrument read operations.  */
@@ -744,27 +748,6 @@ mf_xform_derefs_1 (gimple_stmt_iterator *iter, tree *tp,
 	printf("TREE_CODE(t) = %s, mf_decl_eligible_p : %d\n", 
 		tree_code_name[(int)TREE_CODE(*tp)], mf_decl_eligible_p(*tp));
 
-	if(TREE_CODE(*tp) == ADDR_EXPR){//Currently iterating only one level
-		tree temp = TREE_OPERAND(*tp, 0);
-		printf("Inside ADDR_EXPR check, sub-tree code : %s, mf_decl_eligible_p : %d\n",
-			tree_code_name[(int)TREE_CODE(temp)], mf_decl_eligible_p(temp));
-
-		//This gives NULL. Need to find how to get actual struct
-		#if 0
-		tree tree_struct = identifier_global_value(get_identifier(subtreename));
-		TREE_OPERAND (*tp, 0) = fold_convert (TREE_TYPE(tree_struct), temp);
-		if(chain_index(1, tree_struct) == NULL_TREE){
-			printf("Getting index failed from %s %s\n", 
-				tree_code_name[(int)TREE_CODE(tree_struct)], subtreename);
-		}
-		else
-			printf("Chain index obtained from %s %s\n", 
-				tree_code_name[(int)TREE_CODE(tree_struct)], subtreename);
-		#endif
-	}
-	return;
-
-// Original mudflap code starts here
 	if (type == error_mark_node)
 		return;
 
@@ -774,20 +757,41 @@ mf_xform_derefs_1 (gimple_stmt_iterator *iter, tree *tp,
 	size = TYPE_SIZE_UNIT (type);
 
 	/* Don't instrument marked nodes.  */
-	if (mf_marked_p (t)){
+	if (mf_marked_p (t) && !mf_decl_eligible_p(t)){
 		printf("Returning Here - 1\n");
-		//check if the variable has a struct defined in pass1
-		//printf();
 		return;
 	}
 
-	printf("Ram: Inside mf_xform_derefs_1 - 1\n");
+	if(get_name(*tp)){
+		strcpy(tree_name, get_name(*tp));
+		printf("Ram: Inside mf_xform_derefs_1 for : %s\n", tree_name);
+		strcpy(instr_tree_name, "rz_");
+		strcat(instr_tree_name, tree_name);
+	}
 
   switch (TREE_CODE (t))
     {
+    case ADDR_EXPR:
+		{
+			//return;
+			printf("------ INSIDE CASE ADDR_EXPR ---------\n");
+			tree temp = TREE_OPERAND(t, 0);
+			printf("Inside ADDR_EXPR check, sub-tree code : %s, mf_decl_eligible_p : %d\n",
+						tree_code_name[(int)TREE_CODE(temp)], mf_decl_eligible_p(temp));
+			tree struct_type = NULL_TREE;
+			struct_type = create_struct_type(temp);
+
+			tree rz_orig_val = DECL_CHAIN(TYPE_FIELDS(struct_type));
+			TREE_OPERAND (t, 0) = build3 (COMPONENT_REF, TREE_TYPE(rz_orig_val),
+									get_identifier(instr_tree_name), rz_orig_val, NULL_TREE);
+			if(TREE_OPERAND (t, 0) == NULL_TREE)
+				printf("Failed to set tree operand\n");
+    	}
     case ARRAY_REF:
     case COMPONENT_REF:
-      {
+		{
+					printf("------ INSIDE CASE ARRAY_REF COMPONENT_REF  ---------\n");
+      return;
         /* This is trickier than it may first appear.  The reason is
            that we are looking at expressions from the "inside out" at
            this point.  We may have a complex nested aggregate/array
@@ -893,6 +897,8 @@ mf_xform_derefs_1 (gimple_stmt_iterator *iter, tree *tp,
       break;
 
     case INDIRECT_REF:
+		printf("------ INSIDE CASE INDIRECT_REF  ---------\n");
+		return;
       addr = TREE_OPERAND (t, 0);
       base = addr;
       limit = fold_build2_loc (location, POINTER_PLUS_EXPR, ptr_type_node,
@@ -903,6 +909,8 @@ mf_xform_derefs_1 (gimple_stmt_iterator *iter, tree *tp,
       break;
 
     case MEM_REF:
+		printf("------ INSIDE CASE MEM_REF  ---------\n");
+		return;
       addr = fold_build2_loc (location, POINTER_PLUS_EXPR, TREE_TYPE (TREE_OPERAND (t, 0)),
 		     TREE_OPERAND (t, 0),
 		     fold_convert (sizetype, TREE_OPERAND (t, 1)));
@@ -915,6 +923,8 @@ mf_xform_derefs_1 (gimple_stmt_iterator *iter, tree *tp,
       break;
 
     case TARGET_MEM_REF:
+		printf("------ INSIDE CASE TARGET_MEM_REF  ---------\n");
+		return;
       addr = tree_mem_ref_addr (ptr_type_node, t);
       base = addr;
       limit = fold_build2_loc (location, POINTER_PLUS_EXPR, ptr_type_node,
@@ -925,11 +935,15 @@ mf_xform_derefs_1 (gimple_stmt_iterator *iter, tree *tp,
       break;
 
     case ARRAY_RANGE_REF:
+		printf("------ INSIDE CASE ARRAY_RANGE_REF  ---------\n");
+		return;
       warning (OPT_Wmudflap,
 	       "mudflap checking not yet implemented for ARRAY_RANGE_REF");
       return;
 
     case BIT_FIELD_REF:
+		printf("------ INSIDE CASE BIT_FIELD_REF  ---------\n");
+		return;
       /* ??? merge with COMPONENT_REF code above? */
       {
         tree ofs, rem, bpu;
@@ -967,6 +981,15 @@ mf_xform_derefs_1 (gimple_stmt_iterator *iter, tree *tp,
       break;
 
     default:
+		printf("------ INSIDE CASE DEFAULT  ---------\n");
+		//return;
+		if(mf_decl_eligible_p(t)){
+			tree struct_type = create_struct_type(t);
+			tree rz_orig_val = DECL_CHAIN(TYPE_FIELDS(struct_type));
+			*tp = build3 (COMPONENT_REF, TREE_TYPE(rz_orig_val),
+							get_identifier(instr_tree_name), rz_orig_val, NULL_TREE);
+			printf("2\n");
+		}
       return;
     }
 
@@ -996,10 +1019,11 @@ mf_xform_statements (void)
           switch (gimple_code (s))
             {
             case GIMPLE_ASSIGN:
-		printf("******** Gimlpe Assign ***********\n");
-	      mf_xform_derefs_1 (&i, gimple_assign_lhs_ptr (s),
+		printf("\n\n******** Gimlpe Assign LHS ***********\n");
+		mf_xform_derefs_1 (&i, gimple_assign_lhs_ptr (s),
 		  		 gimple_location (s), integer_one_node);
-	      mf_xform_derefs_1 (&i, gimple_assign_rhs1_ptr (s),
+	    printf("******** Gimlpe Assign RHS ***********\n");
+		mf_xform_derefs_1 (&i, gimple_assign_rhs1_ptr (s),
 		  		 gimple_location (s), integer_zero_node);
 	      grhs_class = get_gimple_rhs_class (gimple_assign_rhs_code (s));
 	      if (grhs_class == GIMPLE_BINARY_RHS)
@@ -1095,7 +1119,6 @@ create_struct_type(tree decl)
     DECL_CONTEXT (fieldrear) = struct_type;
     DECL_CHAIN (fieldfront) = orig_var;
     DECL_CHAIN (orig_var) = fieldrear;
-
     TYPE_FIELDS (struct_type) = fieldfront;
     strcpy(type_name, "rz_");
     strcat(type_name, get_name(decl));
