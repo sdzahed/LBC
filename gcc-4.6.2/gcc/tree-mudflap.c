@@ -724,16 +724,6 @@ mf_decl_eligible_p (tree decl)
 	  && !DECL_HAS_VALUE_EXPR_P (decl));
 }
 
-tree get_instrumented_type(tree temp, char *instr_struct_type_name)
-{
-	char tree_name[50];
-	strcpy(tree_name, get_name(temp));
-	strcpy(instr_struct_type_name, "rz_");
-	strcat(instr_struct_type_name, tree_name);
-	printf("get_instrumented_type for %s\n", instr_struct_type_name);
-	return TYPE_NAME(get_identifier(instr_struct_type_name));
-}
-
 static void
 mf_xform_derefs_1 (gimple_stmt_iterator *iter, tree *tp,
                    location_t location, tree dirflag)
