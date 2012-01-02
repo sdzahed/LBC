@@ -724,25 +724,37 @@ mf_decl_eligible_p (tree decl)
 	  && !DECL_HAS_VALUE_EXPR_P (decl));
 }
 
+tree mx_xform_instrument_pass2(tree temp)
+{
+	char instr_tree_name[50] = {0,};
+	tree struct_type = create_struct_type(temp);
+	tree rz_orig_val = DECL_CHAIN(TYPE_FIELDS(struct_type));
+	strcpy(instr_tree_name, "rz_");
+	strcat(instr_tree_name, get_name(temp));
+	return build3 (COMPONENT_REF, TREE_TYPE(rz_orig_val),
+			get_identifier(instr_tree_name), rz_orig_val, NULL_TREE);
+}
+
 static void
 mf_xform_derefs_1 (gimple_stmt_iterator *iter, tree *tp,
-                   location_t location, tree dirflag)
+		location_t location, tree dirflag)
 {
 	char tree_name[50], instr_tree_name[50] = {0,};
 	tree type, base, limit, addr, size, t;
+	tree struct_type = NULL_TREE, rz_orig_val = NULL_TREE, temp;
 
 	/* Don't instrument read operations.  */
 	if (dirflag == integer_zero_node && flag_mudflap_ignore_reads)
 		return;
 
 	printf("TREE_CODE(t) = %s, mf_decl_eligible_p : %d\n", 
-		tree_code_name[(int)TREE_CODE(*tp)], mf_decl_eligible_p(*tp));
-
-	if (type == error_mark_node)
-		return;
+			tree_code_name[(int)TREE_CODE(*tp)], mf_decl_eligible_p(*tp));
 
 	t = *tp;
 	type = TREE_TYPE (t);
+
+	if (type == error_mark_node)
+		return;
 
 	size = TYPE_SIZE_UNIT (type);
 
@@ -752,238 +764,241 @@ mf_xform_derefs_1 (gimple_stmt_iterator *iter, tree *tp,
 		return;
 	}
 
-	if(get_name(*tp)){
-		strcpy(tree_name, get_name(*tp));
-		printf("Ram: Inside mf_xform_derefs_1 for : %s\n", tree_name);
-		strcpy(instr_tree_name, "rz_");
-		strcat(instr_tree_name, tree_name);
+	switch (TREE_CODE (t))
+	{
+		case ADDR_EXPR:
+			{
+				printf("------ INSIDE CASE ADDR_EXPR ---------\n");
+				temp = TREE_OPERAND(t, 0);
+				if((TREE_OPERAND (t, 0) = mx_xform_instrument_pass2(temp)) == NULL_TREE)
+						printf("Failed to set tree operand\n");
+				return;
+			}
+		case ARRAY_REF:
+		case COMPONENT_REF:
+			{
+				temp = TREE_OPERAND(t, 0);
+				if(TREE_CODE(t) == ARRAY_REF)
+				{
+					printf("------ INSIDE CASE ARRAY_REF  ---------\n");
+					if((TREE_OPERAND (t, 0) = mx_xform_instrument_pass2(temp)) == NULL_TREE)
+							printf("Failed to set tree operand\n");
+				}
+				else if(TREE_CODE(t) == COMPONENT_REF)
+				{
+					printf("------ INSIDE CASE COMPONENT_REF  ---------\n");
+					if(mf_decl_eligible_p(temp))
+					{
+						if((TREE_OPERAND (t, 0) = mx_xform_instrument_pass2(temp)) == NULL_TREE)
+								printf("Failed to set tree operand\n");
+					}
+				}
+				return;
+				/* This is trickier than it may first appear.  The reason is
+				   that we are looking at expressions from the "inside out" at
+				   this point.  We may have a complex nested aggregate/array
+				   expression (e.g. "a.b[i].c"), maybe with an indirection as
+				   the leftmost operator ("p->a.b.d"), where instrumentation
+				   is necessary.  Or we may have an innocent "a.b.c"
+				   expression that must not be instrumented.  We need to
+				   recurse all the way down the nesting structure to figure it
+out: looking just at the outer node is not enough.  */
+				tree var;
+				int component_ref_only = (TREE_CODE (t) == COMPONENT_REF);
+				/* If we have a bitfield component reference, we must note the
+				   innermost addressable object in ELT, from which we will
+				   construct the byte-addressable bounds of the bitfield.  */
+				tree elt = NULL_TREE;
+#if 0
+				int bitfield_ref_p = (TREE_CODE (t) == COMPONENT_REF
+						&& DECL_BIT_FIELD_TYPE (TREE_OPERAND (t, 1)));
+#endif
+
+				/* Iterate to the top of the ARRAY_REF/COMPONENT_REF
+				   containment hierarchy to find the outermost VAR_DECL.  */
+				var = TREE_OPERAND (t, 0);
+				while (1)
+				{
+#if 0
+					if (bitfield_ref_p && elt == NULL_TREE
+							&& (TREE_CODE (var) == ARRAY_REF
+								|| TREE_CODE (var) == COMPONENT_REF))
+						elt = var;
+#endif
+
+					if (TREE_CODE (var) == ARRAY_REF)
+					{
+						component_ref_only = 0;
+						var = TREE_OPERAND (var, 0);
+					}
+					else if (TREE_CODE (var) == COMPONENT_REF)
+						var = TREE_OPERAND (var, 0);
+					else if (INDIRECT_REF_P (var)
+							|| TREE_CODE (var) == MEM_REF)
+					{
+						base = TREE_OPERAND (var, 0);
+						break;
+					}
+					else if (TREE_CODE (var) == VIEW_CONVERT_EXPR)
+					{
+						var = TREE_OPERAND (var, 0);
+						if (CONSTANT_CLASS_P (var)
+								&& TREE_CODE (var) != STRING_CST)
+							return;
+					}
+					else
+					{
+						gcc_assert (TREE_CODE (var) == VAR_DECL
+								|| TREE_CODE (var) == PARM_DECL
+								|| TREE_CODE (var) == RESULT_DECL
+								|| TREE_CODE (var) == STRING_CST);
+						/* Don't instrument this access if the underlying
+						   variable is not "eligible".  This test matches
+						   those arrays that have only known-valid indexes,
+						   and thus are not labeled TREE_ADDRESSABLE.  */
+						if (! mf_decl_eligible_p (var) || component_ref_only)
+							return;
+						else
+						{
+							base = build1 (ADDR_EXPR,
+									build_pointer_type (TREE_TYPE (var)), var);
+							break;
+						}
+					}
+				}
+
+				/* Handle the case of ordinary non-indirection structure
+				   accesses.  These have only nested COMPONENT_REF nodes (no
+				   INDIRECT_REF), but pass through the above filter loop.
+				   Note that it's possible for such a struct variable to match
+				   the eligible_p test because someone else might take its
+				   address sometime.  */
+
+				/* We need special processing for bitfield components, because
+				   their addresses cannot be taken.  */
+#if 0
+				if (bitfield_ref_p)
+				{
+					tree field = TREE_OPERAND (t, 1);
+
+					if (TREE_CODE (DECL_SIZE_UNIT (field)) == INTEGER_CST)
+						size = DECL_SIZE_UNIT (field);
+
+					if (elt)
+						elt = build1 (ADDR_EXPR, build_pointer_type (TREE_TYPE (elt)),
+								elt);
+					addr = fold_convert_loc (location, ptr_type_node, elt ? elt : base);
+					addr = fold_build2_loc (location, POINTER_PLUS_EXPR, ptr_type_node,
+							addr, fold_convert_loc (location, sizetype,
+								byte_position (field)));
+				}
+				else
+#endif
+				addr = build1 (ADDR_EXPR, build_pointer_type (type), t);
+
+				limit = fold_build2_loc (location, MINUS_EXPR, mf_uintptr_type,
+						fold_build2_loc (location, PLUS_EXPR, mf_uintptr_type,
+							convert (mf_uintptr_type, addr),
+							size),
+						integer_one_node);
+				break;
+			}
+
+		case INDIRECT_REF:
+			printf("------ INSIDE CASE INDIRECT_REF  ---------\n");
+			return;
+			addr = TREE_OPERAND (t, 0);
+			base = addr;
+			limit = fold_build2_loc (location, POINTER_PLUS_EXPR, ptr_type_node,
+					fold_build2_loc (location,
+						POINTER_PLUS_EXPR, ptr_type_node, base,
+						size),
+					size_int (-1));
+			break;
+
+		case MEM_REF:
+			printf("------ INSIDE CASE MEM_REF  ---------\n");
+			return;
+			addr = fold_build2_loc (location, POINTER_PLUS_EXPR, TREE_TYPE (TREE_OPERAND (t, 0)),
+					TREE_OPERAND (t, 0),
+					fold_convert (sizetype, TREE_OPERAND (t, 1)));
+			base = addr;
+			limit = fold_build2_loc (location, POINTER_PLUS_EXPR, ptr_type_node,
+					fold_build2_loc (location,
+						POINTER_PLUS_EXPR, ptr_type_node, base,
+						size),
+					size_int (-1));
+			break;
+
+		case TARGET_MEM_REF:
+			printf("------ INSIDE CASE TARGET_MEM_REF  ---------\n");
+			return;
+			addr = tree_mem_ref_addr (ptr_type_node, t);
+			base = addr;
+			limit = fold_build2_loc (location, POINTER_PLUS_EXPR, ptr_type_node,
+					fold_build2_loc (location,
+						POINTER_PLUS_EXPR, ptr_type_node, base,
+						size),
+					size_int (-1));
+			break;
+
+		case ARRAY_RANGE_REF:
+			printf("------ INSIDE CASE ARRAY_RANGE_REF  ---------\n");
+			return;
+			warning (OPT_Wmudflap,
+					"mudflap checking not yet implemented for ARRAY_RANGE_REF");
+			return;
+
+		case BIT_FIELD_REF:
+			printf("------ INSIDE CASE BIT_FIELD_REF  ---------\n");
+			return;
+			/* ??? merge with COMPONENT_REF code above? */
+			{
+				tree ofs, rem, bpu;
+
+				/* If we're not dereferencing something, then the access
+				   must be ok.  */
+				if (TREE_CODE (TREE_OPERAND (t, 0)) != INDIRECT_REF)
+					return;
+
+				bpu = bitsize_int (BITS_PER_UNIT);
+				ofs = convert (bitsizetype, TREE_OPERAND (t, 2));
+				rem = size_binop_loc (location, TRUNC_MOD_EXPR, ofs, bpu);
+				ofs = fold_convert_loc (location,
+						sizetype,
+						size_binop_loc (location,
+							TRUNC_DIV_EXPR, ofs, bpu));
+
+				size = convert (bitsizetype, TREE_OPERAND (t, 1));
+				size = size_binop_loc (location, PLUS_EXPR, size, rem);
+				size = size_binop_loc (location, CEIL_DIV_EXPR, size, bpu);
+				size = convert (sizetype, size);
+
+				addr = TREE_OPERAND (TREE_OPERAND (t, 0), 0);
+				addr = convert (ptr_type_node, addr);
+				addr = fold_build2_loc (location, POINTER_PLUS_EXPR,
+						ptr_type_node, addr, ofs);
+
+				base = addr;
+				limit = fold_build2_loc (location, POINTER_PLUS_EXPR, ptr_type_node,
+						fold_build2_loc (location,
+							POINTER_PLUS_EXPR, ptr_type_node,
+							base, size),
+						size_int (-1));
+			}
+			break;
+
+		default:
+			printf("------ INSIDE CASE DEFAULT  ---------\n");
+			if(mf_decl_eligible_p(t))
+			{
+				if((*tp = mx_xform_instrument_pass2(t)) == NULL_TREE)
+						printf("Failed to set tree operand\n");
+			}
+			return;
 	}
 
-  switch (TREE_CODE (t))
-    {
-    case ADDR_EXPR:
-		{
-			//return;
-			printf("------ INSIDE CASE ADDR_EXPR ---------\n");
-			tree temp = TREE_OPERAND(t, 0);
-			printf("Inside ADDR_EXPR check, sub-tree code : %s, mf_decl_eligible_p : %d\n",
-						tree_code_name[(int)TREE_CODE(temp)], mf_decl_eligible_p(temp));
-			tree struct_type = NULL_TREE;
-			struct_type = create_struct_type(temp);
-
-			tree rz_orig_val = DECL_CHAIN(TYPE_FIELDS(struct_type));
-			TREE_OPERAND (t, 0) = build3 (COMPONENT_REF, TREE_TYPE(rz_orig_val),
-									get_identifier(instr_tree_name), rz_orig_val, NULL_TREE);
-			if(TREE_OPERAND (t, 0) == NULL_TREE)
-				printf("Failed to set tree operand\n");
-    	}
-    case ARRAY_REF:
-    case COMPONENT_REF:
-		{
-					printf("------ INSIDE CASE ARRAY_REF COMPONENT_REF  ---------\n");
-      return;
-        /* This is trickier than it may first appear.  The reason is
-           that we are looking at expressions from the "inside out" at
-           this point.  We may have a complex nested aggregate/array
-           expression (e.g. "a.b[i].c"), maybe with an indirection as
-           the leftmost operator ("p->a.b.d"), where instrumentation
-           is necessary.  Or we may have an innocent "a.b.c"
-           expression that must not be instrumented.  We need to
-           recurse all the way down the nesting structure to figure it
-           out: looking just at the outer node is not enough.  */
-        tree var;
-        int component_ref_only = (TREE_CODE (t) == COMPONENT_REF);
-	/* If we have a bitfield component reference, we must note the
-	   innermost addressable object in ELT, from which we will
-	   construct the byte-addressable bounds of the bitfield.  */
-	tree elt = NULL_TREE;
-	int bitfield_ref_p = (TREE_CODE (t) == COMPONENT_REF
-			      && DECL_BIT_FIELD_TYPE (TREE_OPERAND (t, 1)));
-
-        /* Iterate to the top of the ARRAY_REF/COMPONENT_REF
-           containment hierarchy to find the outermost VAR_DECL.  */
-        var = TREE_OPERAND (t, 0);
-        while (1)
-          {
-	    if (bitfield_ref_p && elt == NULL_TREE
-		&& (TREE_CODE (var) == ARRAY_REF
-		    || TREE_CODE (var) == COMPONENT_REF))
-	      elt = var;
-
-            if (TREE_CODE (var) == ARRAY_REF)
-              {
-                component_ref_only = 0;
-                var = TREE_OPERAND (var, 0);
-              }
-            else if (TREE_CODE (var) == COMPONENT_REF)
-              var = TREE_OPERAND (var, 0);
-            else if (INDIRECT_REF_P (var)
-		     || TREE_CODE (var) == MEM_REF)
-              {
-		base = TREE_OPERAND (var, 0);
-                break;
-              }
-            else if (TREE_CODE (var) == VIEW_CONVERT_EXPR)
-	      {
-		var = TREE_OPERAND (var, 0);
-		if (CONSTANT_CLASS_P (var)
-		    && TREE_CODE (var) != STRING_CST)
-		  return;
-	      }
-            else
-              {
-                gcc_assert (TREE_CODE (var) == VAR_DECL
-                            || TREE_CODE (var) == PARM_DECL
-                            || TREE_CODE (var) == RESULT_DECL
-                            || TREE_CODE (var) == STRING_CST);
-                /* Don't instrument this access if the underlying
-                   variable is not "eligible".  This test matches
-                   those arrays that have only known-valid indexes,
-                   and thus are not labeled TREE_ADDRESSABLE.  */
-                if (! mf_decl_eligible_p (var) || component_ref_only)
-                  return;
-                else
-		  {
-		    base = build1 (ADDR_EXPR,
-				   build_pointer_type (TREE_TYPE (var)), var);
-		    break;
-		  }
-              }
-          }
-
-        /* Handle the case of ordinary non-indirection structure
-           accesses.  These have only nested COMPONENT_REF nodes (no
-           INDIRECT_REF), but pass through the above filter loop.
-           Note that it's possible for such a struct variable to match
-           the eligible_p test because someone else might take its
-           address sometime.  */
-
-        /* We need special processing for bitfield components, because
-           their addresses cannot be taken.  */
-        if (bitfield_ref_p)
-          {
-            tree field = TREE_OPERAND (t, 1);
-
-            if (TREE_CODE (DECL_SIZE_UNIT (field)) == INTEGER_CST)
-              size = DECL_SIZE_UNIT (field);
-
-	    if (elt)
-	      elt = build1 (ADDR_EXPR, build_pointer_type (TREE_TYPE (elt)),
-			    elt);
-            addr = fold_convert_loc (location, ptr_type_node, elt ? elt : base);
-            addr = fold_build2_loc (location, POINTER_PLUS_EXPR, ptr_type_node,
-				addr, fold_convert_loc (location, sizetype,
-							byte_position (field)));
-          }
-        else
-          addr = build1 (ADDR_EXPR, build_pointer_type (type), t);
-
-        limit = fold_build2_loc (location, MINUS_EXPR, mf_uintptr_type,
-                             fold_build2_loc (location, PLUS_EXPR, mf_uintptr_type,
-					  convert (mf_uintptr_type, addr),
-					  size),
-                             integer_one_node);
-      }
-      break;
-
-    case INDIRECT_REF:
-		printf("------ INSIDE CASE INDIRECT_REF  ---------\n");
-		return;
-      addr = TREE_OPERAND (t, 0);
-      base = addr;
-      limit = fold_build2_loc (location, POINTER_PLUS_EXPR, ptr_type_node,
-			   fold_build2_loc (location,
-					POINTER_PLUS_EXPR, ptr_type_node, base,
-					size),
-			   size_int (-1));
-      break;
-
-    case MEM_REF:
-		printf("------ INSIDE CASE MEM_REF  ---------\n");
-		return;
-      addr = fold_build2_loc (location, POINTER_PLUS_EXPR, TREE_TYPE (TREE_OPERAND (t, 0)),
-		     TREE_OPERAND (t, 0),
-		     fold_convert (sizetype, TREE_OPERAND (t, 1)));
-      base = addr;
-      limit = fold_build2_loc (location, POINTER_PLUS_EXPR, ptr_type_node,
-			   fold_build2_loc (location,
-					POINTER_PLUS_EXPR, ptr_type_node, base,
-					size),
-			   size_int (-1));
-      break;
-
-    case TARGET_MEM_REF:
-		printf("------ INSIDE CASE TARGET_MEM_REF  ---------\n");
-		return;
-      addr = tree_mem_ref_addr (ptr_type_node, t);
-      base = addr;
-      limit = fold_build2_loc (location, POINTER_PLUS_EXPR, ptr_type_node,
-			   fold_build2_loc (location,
-					POINTER_PLUS_EXPR, ptr_type_node, base,
-					size),
-			   size_int (-1));
-      break;
-
-    case ARRAY_RANGE_REF:
-		printf("------ INSIDE CASE ARRAY_RANGE_REF  ---------\n");
-		return;
-      warning (OPT_Wmudflap,
-	       "mudflap checking not yet implemented for ARRAY_RANGE_REF");
-      return;
-
-    case BIT_FIELD_REF:
-		printf("------ INSIDE CASE BIT_FIELD_REF  ---------\n");
-		return;
-      /* ??? merge with COMPONENT_REF code above? */
-      {
-        tree ofs, rem, bpu;
-
-        /* If we're not dereferencing something, then the access
-           must be ok.  */
-        if (TREE_CODE (TREE_OPERAND (t, 0)) != INDIRECT_REF)
-          return;
-
-        bpu = bitsize_int (BITS_PER_UNIT);
-        ofs = convert (bitsizetype, TREE_OPERAND (t, 2));
-        rem = size_binop_loc (location, TRUNC_MOD_EXPR, ofs, bpu);
-        ofs = fold_convert_loc (location,
-				sizetype,
-				size_binop_loc (location,
-						TRUNC_DIV_EXPR, ofs, bpu));
-
-        size = convert (bitsizetype, TREE_OPERAND (t, 1));
-        size = size_binop_loc (location, PLUS_EXPR, size, rem);
-        size = size_binop_loc (location, CEIL_DIV_EXPR, size, bpu);
-        size = convert (sizetype, size);
-
-        addr = TREE_OPERAND (TREE_OPERAND (t, 0), 0);
-        addr = convert (ptr_type_node, addr);
-        addr = fold_build2_loc (location, POINTER_PLUS_EXPR,
-			    ptr_type_node, addr, ofs);
-
-        base = addr;
-        limit = fold_build2_loc (location, POINTER_PLUS_EXPR, ptr_type_node,
-                             fold_build2_loc (location,
-					  POINTER_PLUS_EXPR, ptr_type_node,
-					   base, size),
-                             size_int (-1));
-      }
-      break;
-
-    default:
-		printf("------ INSIDE CASE DEFAULT  ---------\n");
-		//return;
-		if(mf_decl_eligible_p(t)){
-			tree struct_type = create_struct_type(t);
-			tree rz_orig_val = DECL_CHAIN(TYPE_FIELDS(struct_type));
-			*tp = build3 (COMPONENT_REF, TREE_TYPE(rz_orig_val),
-							get_identifier(instr_tree_name), rz_orig_val, NULL_TREE);
-			printf("2\n");
-		}
-      return;
-    }
-
-  mf_build_check_statement_for (base, limit, iter, location, dirflag);
+	mf_build_check_statement_for (base, limit, iter, location, dirflag);
 }
 /* Transform
    1) Memory references.
