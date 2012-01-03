@@ -407,8 +407,8 @@ mx_xform_instrument_pass2(tree temp)
 	tree rz_orig_val = DECL_CHAIN(TYPE_FIELDS(struct_type));
 	strcpy(instr_tree_name, "rz_");
 	strcat(instr_tree_name, get_name(temp));
-	return build3 (COMPONENT_REF, TREE_TYPE(rz_orig_val),
-			get_identifier(instr_tree_name), rz_orig_val, NULL_TREE);
+	return mf_mark(build3 (COMPONENT_REF, TREE_TYPE(rz_orig_val),
+			get_identifier(instr_tree_name), rz_orig_val, NULL_TREE));
 }
 
 static void
@@ -673,7 +673,6 @@ out: looking just at the outer node is not enough.  */
 				if((*tp = mx_xform_instrument_pass2(t)) == NULL_TREE)
 						printf("Failed to set tree operand\n");
 			}
-			return;
 	}
 
     // Add the call to is_char_red
@@ -858,7 +857,6 @@ create_struct_var (tree type, tree decl, location_t location)
 gimple_seq
 mx_register_decls (tree decl, gimple_seq seq, gimple stmt, location_t location, bool func_args)
 {
-    tree prev_decl = NULL_TREE;
     gimple_seq finally_stmts = NULL;
     gimple_stmt_iterator initially_stmts = gsi_start (seq);
 
@@ -958,17 +956,8 @@ mx_register_decls (tree decl, gimple_seq seq, gimple stmt, location_t location, 
                 // TODO what about ensure_sframe_bitmap()?
             }
             mf_mark (decl);
-
-            // TODO would unlinking be enough or de we need to do gimple_bind_set_vars()?
-            if (prev_decl != NULL_TREE && !func_args){
-                DECL_CHAIN(prev_decl) = DECL_CHAIN(decl);
-                decl = prev_decl;
-            }
         }
 
-        // This does not seem to be working. Need to figure out how to delete
-        // the original declaration.
-        prev_decl = decl;
         decl = DECL_CHAIN (decl);
     }
 
