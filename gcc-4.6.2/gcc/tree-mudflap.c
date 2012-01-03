@@ -54,11 +54,8 @@ along with GCC; see the file COPYING3.  If not see
 /* Helpers.  */
 static tree mf_build_string (const char *string);
 static tree mf_varname_tree (tree);
-static tree mf_file_function_line_tree (location_t);
 
 /* Indirection-related instrumentation.  */
-static void mf_decl_cache_locals (void);
-static void mf_decl_clear_locals (void);
 static void mf_xform_statements (void);
 static unsigned int execute_mudflap_function_ops (void);
 
@@ -69,6 +66,7 @@ static tree mx_xfn_xform_decls (gimple_stmt_iterator *, bool *,
 static gimple_seq mx_register_decls (tree, gimple_seq, gimple, location_t, bool);
 static unsigned int execute_mudflap_function_decls (void);
 static tree create_struct_type(tree decl);
+static tree mx_xform_instrument_pass2(tree temp);
 
 
 /* ------------------------------------------------------------------------ */
@@ -191,53 +189,6 @@ mf_varname_tree (tree decl)
   return result;
 }
 
-
-/* And another friend, for producing a simpler message.  */
-
-static tree
-mf_file_function_line_tree (location_t location)
-{
-  expanded_location xloc = expand_location (location);
-  const char *file = NULL, *colon, *line, *op, *name, *cp;
-  char linecolbuf[30]; /* Enough for two decimal numbers plus a colon.  */
-  char *string;
-  tree result;
-
-  /* Add FILENAME[:LINENUMBER[:COLUMNNUMBER]].  */
-  file = xloc.file;
-  if (file == NULL && current_function_decl != NULL_TREE)
-    file = DECL_SOURCE_FILE (current_function_decl);
-  if (file == NULL)
-    file = "<unknown file>";
-
-  if (xloc.line > 0)
-    {
-      if (xloc.column > 0)
-        sprintf (linecolbuf, "%d:%d", xloc.line, xloc.column);
-      else
-        sprintf (linecolbuf, "%d", xloc.line);
-      colon = ":";
-      line = linecolbuf;
-    }
-  else
-    colon = line = "";
-
-  /* Add (FUNCTION).  */
-  name = lang_hooks.decl_printable_name (current_function_decl, 1);
-  if (name)
-    {
-      op = " (";
-      cp = ")";
-    }
-  else
-    op = name = cp = "";
-
-  string = concat (file, colon, line, op, name, cp, NULL);
-  result = mf_build_string (string);
-  free (string);
-
-  return result;
-}
 
 
 /* global tree nodes */
@@ -427,282 +378,6 @@ execute_mudflap_function_ops (void)
   return 0;
 }
 
-/* Insert a gimple_seq SEQ on all the outgoing edges out of BB.  Note that
-   if BB has more than one edge, STMT will be replicated for each edge.
-   Also, abnormal edges will be ignored.  */
-
-static void
-insert_edge_copies_seq (gimple_seq seq, basic_block bb)
-{
-  edge e;
-  edge_iterator ei;
-  unsigned n_copies = -1;
-
-  FOR_EACH_EDGE (e, ei, bb->succs)
-    if (!(e->flags & EDGE_ABNORMAL))
-      n_copies++;
-
-  FOR_EACH_EDGE (e, ei, bb->succs)
-    if (!(e->flags & EDGE_ABNORMAL))
-      gsi_insert_seq_on_edge (e, n_copies-- > 0 ? gimple_seq_copy (seq) : seq);
-}
-
-/* Create and initialize local shadow variables for the lookup cache
-   globals.  Put their decls in the *_l globals for use by
-   mf_build_check_statement_for.  */
-
-static void
-mf_decl_cache_locals (void)
-{
-  gimple g;
-  gimple_seq seq = gimple_seq_alloc ();
-
-  /* Build the cache vars.  */
-  mf_cache_shift_decl_l
-    = mf_mark (make_rename_temp (TREE_TYPE (mf_cache_shift_decl),
-                               "__mf_lookup_shift_l"));
-
-  mf_cache_mask_decl_l
-    = mf_mark (make_rename_temp (TREE_TYPE (mf_cache_mask_decl),
-                               "__mf_lookup_mask_l"));
-
-  /* Build initialization nodes for the cache vars.  We just load the
-     globals into the cache variables.  */
-  g = gimple_build_assign (mf_cache_shift_decl_l, mf_cache_shift_decl);
-  gimple_set_location (g, DECL_SOURCE_LOCATION (current_function_decl));
-  gimple_seq_add_stmt (&seq, g);
-
-  g = gimple_build_assign (mf_cache_mask_decl_l, mf_cache_mask_decl);
-  gimple_set_location (g, DECL_SOURCE_LOCATION (current_function_decl));
-  gimple_seq_add_stmt (&seq, g);
-
-  insert_edge_copies_seq (seq, ENTRY_BLOCK_PTR);
-
-  gsi_commit_edge_inserts ();
-}
-
-
-static void
-mf_decl_clear_locals (void)
-{
-  /* Unset local shadows.  */
-  mf_cache_shift_decl_l = NULL_TREE;
-  mf_cache_mask_decl_l = NULL_TREE;
-}
-
-static void
-mf_build_check_statement_for (tree base, tree limit,
-                              gimple_stmt_iterator *instr_gsi,
-                              location_t location, tree dirflag)
-{
-  gimple_stmt_iterator gsi;
-  basic_block cond_bb, then_bb, join_bb;
-  edge e;
-  tree cond, t, u, v;
-  tree mf_base;
-  tree mf_elem;
-  tree mf_limit;
-  gimple g;
-  gimple_seq seq, stmts;
-
-  /* We first need to split the current basic block, and start altering
-     the CFG.  This allows us to insert the statements we're about to
-     construct into the right basic blocks.  */
-
-  cond_bb = gimple_bb (gsi_stmt (*instr_gsi));
-  gsi = *instr_gsi;
-  gsi_prev (&gsi);
-  if (! gsi_end_p (gsi))
-    e = split_block (cond_bb, gsi_stmt (gsi));
-  else
-    e = split_block_after_labels (cond_bb);
-  cond_bb = e->src;
-  join_bb = e->dest;
-
-  /* A recap at this point: join_bb is the basic block at whose head
-     is the gimple statement for which this check expression is being
-     built.  cond_bb is the (possibly new, synthetic) basic block the
-     end of which will contain the cache-lookup code, and a
-     conditional that jumps to the cache-miss code or, much more
-     likely, over to join_bb.  */
-
-  /* Create the bb that contains the cache-miss fallback block (mf_check).  */
-  then_bb = create_empty_bb (cond_bb);
-  make_edge (cond_bb, then_bb, EDGE_TRUE_VALUE);
-  make_single_succ_edge (then_bb, join_bb, EDGE_FALLTHRU);
-
-  /* Mark the pseudo-fallthrough edge from cond_bb to join_bb.  */
-  e = find_edge (cond_bb, join_bb);
-  e->flags = EDGE_FALSE_VALUE;
-  e->count = cond_bb->count;
-  e->probability = REG_BR_PROB_BASE;
-
-  /* Update dominance info.  Note that bb_join's data was
-     updated by split_block.  */
-  if (dom_info_available_p (CDI_DOMINATORS))
-    {
-      set_immediate_dominator (CDI_DOMINATORS, then_bb, cond_bb);
-      set_immediate_dominator (CDI_DOMINATORS, join_bb, cond_bb);
-    }
-
-  /* Build our local variables.  */
-  mf_elem = make_rename_temp (mf_cache_structptr_type, "__mf_elem");
-  mf_base = make_rename_temp (mf_uintptr_type, "__mf_base");
-  mf_limit = make_rename_temp (mf_uintptr_type, "__mf_limit");
-
-  /* Build: __mf_base = (uintptr_t) <base address expression>.  */
-  seq = gimple_seq_alloc ();
-  t = fold_convert_loc (location, mf_uintptr_type,
-			unshare_expr (base));
-  t = force_gimple_operand (t, &stmts, false, NULL_TREE);
-  gimple_seq_add_seq (&seq, stmts);
-  g = gimple_build_assign (mf_base, t);
-  gimple_set_location (g, location);
-  gimple_seq_add_stmt (&seq, g);
-
-  /* Build: __mf_limit = (uintptr_t) <limit address expression>.  */
-  t = fold_convert_loc (location, mf_uintptr_type,
-			unshare_expr (limit));
-  t = force_gimple_operand (t, &stmts, false, NULL_TREE);
-  gimple_seq_add_seq (&seq, stmts);
-  g = gimple_build_assign (mf_limit, t);
-  gimple_set_location (g, location);
-  gimple_seq_add_stmt (&seq, g);
-
-  /* Build: __mf_elem = &__mf_lookup_cache [(__mf_base >> __mf_shift)
-                                            & __mf_mask].  */
-  t = build2 (RSHIFT_EXPR, mf_uintptr_type, mf_base,
-              flag_mudflap_threads ? mf_cache_shift_decl
-	       : mf_cache_shift_decl_l);
-  t = build2 (BIT_AND_EXPR, mf_uintptr_type, t,
-              flag_mudflap_threads ? mf_cache_mask_decl
-	       : mf_cache_mask_decl_l);
-  t = build4 (ARRAY_REF,
-              TREE_TYPE (TREE_TYPE (mf_cache_array_decl)),
-              mf_cache_array_decl, t, NULL_TREE, NULL_TREE);
-  t = build1 (ADDR_EXPR, mf_cache_structptr_type, t);
-  t = force_gimple_operand (t, &stmts, false, NULL_TREE);
-  gimple_seq_add_seq (&seq, stmts);
-  g = gimple_build_assign (mf_elem, t);
-  gimple_set_location (g, location);
-  gimple_seq_add_stmt (&seq, g);
-
-  /* Quick validity check.
-
-     if (__mf_elem->low > __mf_base
-         || (__mf_elem_high < __mf_limit))
-        {
-          __mf_check ();
-          ... and only if single-threaded:
-          __mf_lookup_shift_1 = f...;
-          __mf_lookup_mask_l = ...;
-        }
-
-     It is expected that this body of code is rarely executed so we mark
-     the edge to the THEN clause of the conditional jump as unlikely.  */
-
-  /* Construct t <-- '__mf_elem->low  > __mf_base'.  */
-  t = build3 (COMPONENT_REF, mf_uintptr_type,
-              build1 (INDIRECT_REF, mf_cache_struct_type, mf_elem),
-              TYPE_FIELDS (mf_cache_struct_type), NULL_TREE);
-  t = build2 (GT_EXPR, boolean_type_node, t, mf_base);
-
-  /* Construct '__mf_elem->high < __mf_limit'.
-
-     First build:
-        1) u <--  '__mf_elem->high'
-        2) v <--  '__mf_limit'.
-
-     Then build 'u <-- (u < v).  */
-
-  u = build3 (COMPONENT_REF, mf_uintptr_type,
-              build1 (INDIRECT_REF, mf_cache_struct_type, mf_elem),
-              DECL_CHAIN (TYPE_FIELDS (mf_cache_struct_type)), NULL_TREE);
-
-  v = mf_limit;
-
-  u = build2 (LT_EXPR, boolean_type_node, u, v);
-
-  /* Build the composed conditional: t <-- 't || u'.  Then store the
-     result of the evaluation of 't' in a temporary variable which we
-     can use as the condition for the conditional jump.  */
-  t = build2 (TRUTH_OR_EXPR, boolean_type_node, t, u);
-  t = force_gimple_operand (t, &stmts, false, NULL_TREE);
-  gimple_seq_add_seq (&seq, stmts);
-  cond = make_rename_temp (boolean_type_node, "__mf_unlikely_cond");
-  g = gimple_build_assign  (cond, t);
-  gimple_set_location (g, location);
-  gimple_seq_add_stmt (&seq, g);
-
-  /* Build the conditional jump.  'cond' is just a temporary so we can
-     simply build a void COND_EXPR.  We do need labels in both arms though.  */
-  g = gimple_build_cond (NE_EXPR, cond, boolean_false_node, NULL_TREE,
-			 NULL_TREE);
-  gimple_set_location (g, location);
-  gimple_seq_add_stmt (&seq, g);
-
-  /* At this point, after so much hard work, we have only constructed
-     the conditional jump,
-
-     if (__mf_elem->low > __mf_base
-         || (__mf_elem_high < __mf_limit))
-
-     The lowered GIMPLE tree representing this code is in the statement
-     list starting at 'head'.
-
-     We can insert this now in the current basic block, i.e. the one that
-     the statement we're instrumenting was originally in.  */
-  gsi = gsi_last_bb (cond_bb);
-  gsi_insert_seq_after (&gsi, seq, GSI_CONTINUE_LINKING);
-
-  /*  Now build up the body of the cache-miss handling:
-
-     __mf_check();
-     refresh *_l vars.
-
-     This is the body of the conditional.  */
-
-  seq = gimple_seq_alloc ();
-  /* u is a string, so it is already a gimple value.  */
-  u = mf_file_function_line_tree (location);
-  /* NB: we pass the overall [base..limit] range to mf_check.  */
-  v = fold_build2_loc (location, PLUS_EXPR, mf_uintptr_type,
-		   fold_build2_loc (location,
-				MINUS_EXPR, mf_uintptr_type, mf_limit, mf_base),
-		   build_int_cst (mf_uintptr_type, 1));
-  v = force_gimple_operand (v, &stmts, true, NULL_TREE);
-  gimple_seq_add_seq (&seq, stmts);
-  g = gimple_build_call (mf_check_fndecl, 4, mf_base, v, dirflag, u);
-  //g = gimple_build_call (lbc_is_char_red_fndecl, 3, mf_base, v, dirflag, u); 
-
-  gimple_seq_add_stmt (&seq, g);
-
-  if (! flag_mudflap_threads)
-    {
-      if (stmt_ends_bb_p (g))
-	{
-	  gsi = gsi_start_bb (then_bb);
-	  gsi_insert_seq_after (&gsi, seq, GSI_CONTINUE_LINKING);
-	  e = split_block (then_bb, g);
-	  then_bb = e->dest;
-	  seq = gimple_seq_alloc ();
-	}
-
-      g = gimple_build_assign (mf_cache_shift_decl_l, mf_cache_shift_decl);
-      gimple_seq_add_stmt (&seq, g);
-
-      g = gimple_build_assign (mf_cache_mask_decl_l, mf_cache_mask_decl);
-      gimple_seq_add_stmt (&seq, g);
-    }
-
-  /* Insert the check code in the THEN block.  */
-  gsi = gsi_start_bb (then_bb);
-  gsi_insert_seq_after (&gsi, seq, GSI_CONTINUE_LINKING);
-
-  *instr_gsi = gsi_start_bb (join_bb);
-}
-
-
 /* Check whether the given decl, generally a VAR_DECL or PARM_DECL, is
    eligible for instrumentation.  For the mudflap1 pass, this implies
    that it should be registered with the libmudflap runtime.  For the
@@ -724,7 +399,8 @@ mf_decl_eligible_p (tree decl)
 	  && !DECL_HAS_VALUE_EXPR_P (decl));
 }
 
-tree mx_xform_instrument_pass2(tree temp)
+static tree
+mx_xform_instrument_pass2(tree temp)
 {
 	char instr_tree_name[50] = {0,};
 	tree struct_type = create_struct_type(temp);
@@ -739,9 +415,11 @@ static void
 mf_xform_derefs_1 (gimple_stmt_iterator *iter, tree *tp,
 		location_t location, tree dirflag)
 {
-	char tree_name[50], instr_tree_name[50] = {0,};
 	tree type, base, limit, addr, size, t;
-	tree struct_type = NULL_TREE, rz_orig_val = NULL_TREE, temp;
+	tree temp;
+    bool check_red_flag = 0;
+    tree fncall_param_val;
+    gimple is_char_red_call;
 
 	/* Don't instrument read operations.  */
 	if (dirflag == integer_zero_node && flag_mudflap_ignore_reads)
@@ -777,6 +455,7 @@ mf_xform_derefs_1 (gimple_stmt_iterator *iter, tree *tp,
 		case ARRAY_REF:
 		case COMPONENT_REF:
 			{
+                check_red_flag = 1;
 				temp = TREE_OPERAND(t, 0);
 				if(TREE_CODE(t) == ARRAY_REF)
 				{
@@ -793,7 +472,6 @@ mf_xform_derefs_1 (gimple_stmt_iterator *iter, tree *tp,
 								printf("Failed to set tree operand\n");
 					}
 				}
-				return;
 				/* This is trickier than it may first appear.  The reason is
 				   that we are looking at expressions from the "inside out" at
 				   this point.  We may have a complex nested aggregate/array
@@ -906,7 +584,7 @@ out: looking just at the outer node is not enough.  */
 
 		case INDIRECT_REF:
 			printf("------ INSIDE CASE INDIRECT_REF  ---------\n");
-			return;
+            check_red_flag = 1;
 			addr = TREE_OPERAND (t, 0);
 			base = addr;
 			limit = fold_build2_loc (location, POINTER_PLUS_EXPR, ptr_type_node,
@@ -918,7 +596,7 @@ out: looking just at the outer node is not enough.  */
 
 		case MEM_REF:
 			printf("------ INSIDE CASE MEM_REF  ---------\n");
-			return;
+            check_red_flag = 1;
 			addr = fold_build2_loc (location, POINTER_PLUS_EXPR, TREE_TYPE (TREE_OPERAND (t, 0)),
 					TREE_OPERAND (t, 0),
 					fold_convert (sizetype, TREE_OPERAND (t, 1)));
@@ -998,8 +676,17 @@ out: looking just at the outer node is not enough.  */
 			return;
 	}
 
-	mf_build_check_statement_for (base, limit, iter, location, dirflag);
+    // Add the call to is_char_red
+    if (check_red_flag) {
+        fncall_param_val = fold_build2_loc (location, MEM_REF, unsigned_type_node, base, \
+                            build_int_cst(unsigned_type_node, 0));
+        is_char_red_call = gimple_build_call (lbc_is_char_red_fndecl, 3, fncall_param_val, size, \
+                            fold_convert_loc(location, ptr_type_node, base));
+        gimple_set_location (is_char_red_call, location);
+        gsi_insert_before (iter, is_char_red_call, GSI_SAME_STMT);
+    }
 }
+
 /* Transform
    1) Memory references.
    2) BUILTIN_ALLOCA calls.
