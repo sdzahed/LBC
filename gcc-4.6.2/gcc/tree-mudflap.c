@@ -678,7 +678,7 @@ out: looking just at the outer node is not enough.  */
     // Add the call to is_char_red
     if (check_red_flag) {
         fncall_param_val = fold_build2_loc (location, MEM_REF, unsigned_type_node, base, \
-                            build_int_cst(unsigned_type_node, 0));
+                            build_int_cst(build_pointer_type(unsigned_type_node), 0));
         is_char_red_call = gimple_build_call (lbc_is_char_red_fndecl, 3, fncall_param_val, size, \
                             fold_convert_loc(location, ptr_type_node, base));
         gimple_set_location (is_char_red_call, location);
