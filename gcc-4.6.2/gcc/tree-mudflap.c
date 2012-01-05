@@ -68,6 +68,25 @@ static unsigned int execute_mudflap_function_decls (void);
 static tree create_struct_type(tree decl);
 static tree mx_xform_instrument_pass2(tree temp);
 
+/* Helper method to build a string cst.
+   Used by mf_build_asm
+ */
+static tree
+mf_build_string1 (const char *string)
+{
+  size_t len = strlen (string);
+  tree result = mf_mark (build_string (len + 1, string));
+
+  TREE_TYPE (result) = build_array_type
+    (char_type_node, build_index_type (build_int_cst (NULL_TREE, len)));
+  TREE_CONSTANT (result) = 1;
+  TREE_READONLY (result) = 1;
+  TREE_STATIC (result) = 1;
+
+  //result = build1 (ADDR_EXPR, build_pointer_type (char_type_node), result);
+
+  return mf_mark (result);
+}
 
 /* ------------------------------------------------------------------------ */
 /* Some generally helpful functions for mudflap instrumentation.  */
@@ -897,7 +916,24 @@ create_struct_var (tree type, tree decl, location_t location)
     return tmp_var;
 }
 
+static gimple
+mf_build_asm (char *asm_str, tree output, bool volatile_p)
+{
+    VEC(tree,gc) *inputs;
+    VEC(tree,gc) *outputs;
+    VEC(tree,gc) *clobbers;
+    VEC(tree,gc) *labels;
 
+    inputs = clobbers = labels = NULL;
+
+    output = build_tree_list(build_tree_list(NULL, mf_build_string1("=g")), output);
+    VEC_safe_push(tree, gc, outputs, output);
+    gimple stmt = gimple_build_asm_vec (asm_str, \
+            inputs, outputs, clobbers, labels);
+    gimple_asm_set_volatile(stmt, volatile_p);
+    gimple_asm_set_input (stmt, false);
+    return stmt;
+}
 
 /* Synthesize a CALL_EXPR and a TRY_FINALLY_EXPR, for this chain of
    _DECLs if appropriate.  Arrange to call the __mf_register function
@@ -927,12 +963,30 @@ mx_register_decls (tree decl, gimple_seq seq, gimple stmt, location_t location, 
                };
              */
 
-			//TREE_VALUE(mf_varname_tree(decl))
-
             if (!func_args && !sframe_inserted){
-                gimple ensure_fn_call = gimple_build_call (lbc_ensure_sframe_bitmap_fndecl, 0);
+                tree frame_start, frame_end;
+                gimple stmt_esp, stmt_ebp;
+                char *asm_esp = "mov %%esp, %0";
+                char *asm_ebp = "mov %%ebp, %0";
+
+                frame_start = mf_mark (build_decl (location,
+                                       VAR_DECL, get_identifier ("frame_start"), ptr_type_node));
+                frame_end = mf_mark (build_decl (location,
+                                       VAR_DECL, get_identifier ("frame_end"), ptr_type_node));
+                DECL_CHAIN(frame_start) = frame_end;
+                declare_vars(frame_start, stmt, 0);
+
+                stmt_esp = mf_build_asm(asm_esp, frame_start, true);
+                stmt_ebp = mf_build_asm(asm_ebp, frame_end, true);
+
+                gsi_insert_before (&initially_stmts, stmt_esp, GSI_SAME_STMT);
+                gsi_insert_before (&initially_stmts, stmt_ebp, GSI_SAME_STMT);
+
+                gimple ensure_fn_call = gimple_build_call (lbc_ensure_sframe_bitmap_fndecl, \
+                                            2, frame_start, frame_end);
                 gimple_set_location (ensure_fn_call, location);
                 gsi_insert_before (&initially_stmts, ensure_fn_call, GSI_SAME_STMT);
+
                 sframe_inserted = true;
             }
 			
