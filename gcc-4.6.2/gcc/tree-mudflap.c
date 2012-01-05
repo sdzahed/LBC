@@ -53,7 +53,7 @@ along with GCC; see the file COPYING3.  If not see
 
 /* Helpers.  */
 static tree mf_build_string (const char *string);
-static tree mf_varname_tree (tree);
+char* mf_varname_tree (tree);
 
 /* Indirection-related instrumentation.  */
 static void mf_xform_statements (void);
@@ -95,98 +95,100 @@ mf_build_string (const char *string)
    Try to construct a helpful string, including file/function/variable
    name.  */
 
-static tree
-mf_varname_tree (tree decl)
+//static tree
+char * mf_varname_tree (tree decl)
 {
-  static pretty_printer buf_rec;
-  static int initialized = 0;
-  pretty_printer *buf = & buf_rec;
-  const char *buf_contents;
-  tree result;
+	static pretty_printer buf_rec;
+	static int initialized = 0;
+	pretty_printer *buf = & buf_rec;
+	const char *buf_contents;
+	tree result;
 
-  gcc_assert (decl);
+	gcc_assert (decl);
 
-  if (!initialized)
-    {
-      pp_construct (buf, /* prefix */ NULL, /* line-width */ 0);
-      initialized = 1;
-    }
-  pp_clear_output_area (buf);
+	if (!initialized)
+	{
+		pp_construct (buf, /* prefix */ NULL, /* line-width */ 0);
+		initialized = 1;
+	}
+	pp_clear_output_area (buf);
 
-  /* Add FILENAME[:LINENUMBER[:COLUMNNUMBER]].  */
-  {
-    expanded_location xloc = expand_location (DECL_SOURCE_LOCATION (decl));
-    const char *sourcefile;
-    unsigned sourceline = xloc.line;
-    unsigned sourcecolumn = 0;
-    sourcecolumn = xloc.column;
-    sourcefile = xloc.file;
-    if (sourcefile == NULL && current_function_decl != NULL_TREE)
-      sourcefile = DECL_SOURCE_FILE (current_function_decl);
-    if (sourcefile == NULL)
-      sourcefile = "<unknown file>";
+	/* Add FILENAME[:LINENUMBER[:COLUMNNUMBER]].  */
+	{
+		expanded_location xloc = expand_location (DECL_SOURCE_LOCATION (decl));
+		const char *sourcefile;
+		unsigned sourceline = xloc.line;
+		unsigned sourcecolumn = 0;
+		sourcecolumn = xloc.column;
+		sourcefile = xloc.file;
+		if (sourcefile == NULL && current_function_decl != NULL_TREE)
+			sourcefile = DECL_SOURCE_FILE (current_function_decl);
+		if (sourcefile == NULL)
+			sourcefile = "<unknown file>";
 
-    pp_string (buf, sourcefile);
+		pp_string (buf, sourcefile);
 
-    if (sourceline != 0)
-      {
-        pp_string (buf, ":");
-        pp_decimal_int (buf, sourceline);
+		if (sourceline != 0)
+		{
+			pp_string (buf, ":");
+			pp_decimal_int (buf, sourceline);
 
-        if (sourcecolumn != 0)
-          {
-            pp_string (buf, ":");
-            pp_decimal_int (buf, sourcecolumn);
-          }
-      }
-  }
+			if (sourcecolumn != 0)
+			{
+				pp_string (buf, ":");
+				pp_decimal_int (buf, sourcecolumn);
+			}
+		}
+	}
 
-  if (current_function_decl != NULL_TREE)
-    {
-      /* Add (FUNCTION) */
-      pp_string (buf, " (");
-      {
-        const char *funcname = NULL;
-        if (DECL_NAME (current_function_decl))
-          funcname = lang_hooks.decl_printable_name (current_function_decl, 1);
-        if (funcname == NULL)
-          funcname = "anonymous fn";
+	if (current_function_decl != NULL_TREE)
+	{
+		/* Add (FUNCTION) */
+		pp_string (buf, " (");
+		{
+			const char *funcname = NULL;
+			if (DECL_NAME (current_function_decl))
+				funcname = lang_hooks.decl_printable_name (current_function_decl, 1);
+			if (funcname == NULL)
+				funcname = "anonymous fn";
 
-        pp_string (buf, funcname);
-      }
-      pp_string (buf, ") ");
-    }
-  else
-    pp_string (buf, " ");
+			pp_string (buf, funcname);
+		}
+		pp_string (buf, ") ");
+	}
+	else
+		pp_string (buf, " ");
 
-  /* Add <variable-declaration>, possibly demangled.  */
-  {
-    const char *declname = NULL;
+	/* Add <variable-declaration>, possibly demangled.  */
+	{
+		const char *declname = NULL;
 
-    if (DECL_NAME (decl) != NULL)
-      {
-	if (strcmp ("GNU C++", lang_hooks.name) == 0)
-	  {
-	    /* The gcc/cp decl_printable_name hook doesn't do as good a job as
-	       the libiberty demangler.  */
-	    declname = cplus_demangle (IDENTIFIER_POINTER (DECL_NAME (decl)),
-				       DMGL_AUTO | DMGL_VERBOSE);
-	  }
-	if (declname == NULL)
-	  declname = lang_hooks.decl_printable_name (decl, 3);
-      }
-    if (declname == NULL)
-      declname = "<unnamed variable>";
+		if (DECL_NAME (decl) != NULL)
+		{
+			if (strcmp ("GNU C++", lang_hooks.name) == 0)
+			{
+				/* The gcc/cp decl_printable_name hook doesn't do as good a job as
+				   the libiberty demangler.  */
+				declname = cplus_demangle (IDENTIFIER_POINTER (DECL_NAME (decl)),
+						DMGL_AUTO | DMGL_VERBOSE);
+			}
+			if (declname == NULL)
+				declname = lang_hooks.decl_printable_name (decl, 3);
+		}
+		if (declname == NULL)
+			declname = "<unnamed variable>";
 
-    pp_string (buf, declname);
-  }
+		pp_string (buf, declname);
+	}
 
-  /* Return the lot as a new STRING_CST.  */
-  buf_contents = pp_base_formatted_text (buf);
-  result = mf_build_string (buf_contents);
-  pp_clear_output_area (buf);
+	/* Return the lot as a new STRING_CST.  */
+	buf_contents = pp_base_formatted_text (buf);
+	//printf("buf_contents : %s\n", buf_contents);
+	result = mf_build_string (buf_contents);
+	pp_clear_output_area (buf);
 
-  return result;
+	//  return result;
+	return buf_contents;
 }
 
 
@@ -257,6 +259,18 @@ static GTY (()) tree lbc_ensure_sframe_bitmap_fndecl;
 /* void is_char_red (unsigned int value,unsigned int orig_value_size, const void* ptr)*/
 static GTY (()) tree lbc_is_char_red_fndecl;
 
+static GTY (()) tree global_struct_var;
+
+struct htable_entry{
+	char name[100];
+	tree t_name;
+};
+
+#define HTABLE_MAX_ENTRY 1000
+struct htable_entry myHtable[HTABLE_MAX_ENTRY];
+int count = 0;
+
+
 /* Helper for mudflap_init: construct a decl with the given category,
    name, and type, mark it an external reference, and pushdecl it.  */
 static inline tree
@@ -301,45 +315,44 @@ mf_make_mf_cache_struct_type (tree field_type)
 
 /* Initialize the global tree nodes that correspond to mf-runtime.h
    declarations.  */
-void
-mudflap_init (void)
+void mudflap_init (void)
 {
-  static bool done = false;
+	static bool done = false;
 
-  tree lbc_init_uninit_rz_fntype;
-  tree lbc_ensure_sframe_fntype;
-  tree lbc_is_char_red_fntype;
-  tree lbc_const_void_ptr_type;
+	tree lbc_init_uninit_rz_fntype;
+	tree lbc_ensure_sframe_fntype;
+	tree lbc_is_char_red_fntype;
+	tree lbc_const_void_ptr_type;
 
-  if (done)
-    return;
-  done = true;
+	if (done)
+		return;
+	done = true;
 
-  lbc_const_void_ptr_type = build_qualified_type (ptr_type_node, TYPE_QUAL_CONST);
+	lbc_const_void_ptr_type = build_qualified_type (ptr_type_node, TYPE_QUAL_CONST);
 
-  lbc_init_uninit_rz_fntype =
-    build_function_type_list (void_type_node, ptr_type_node,
-								unsigned_type_node, NULL_TREE);
-  lbc_ensure_sframe_fntype =
-    build_function_type_list (void_type_node, void_type_node,
-                                NULL_TREE);
+	lbc_init_uninit_rz_fntype =
+		build_function_type_list (void_type_node, ptr_type_node,
+				unsigned_type_node, NULL_TREE);
+	lbc_ensure_sframe_fntype =
+		build_function_type_list (void_type_node, void_type_node,
+				NULL_TREE);
 
-  lbc_is_char_red_fntype =
-    build_function_type_list (void_type_node, unsigned_type_node,
+	lbc_is_char_red_fntype =
+		build_function_type_list (void_type_node, unsigned_type_node,
 				unsigned_type_node, lbc_const_void_ptr_type, NULL_TREE);
 
-  lbc_init_front_rz_fndecl = mf_make_builtin (FUNCTION_DECL, "init_front_redzone",
-                                    lbc_init_uninit_rz_fntype);
-  lbc_uninit_front_rz_fndecl = mf_make_builtin (FUNCTION_DECL, "uninit_front_redzone",
-                                    lbc_init_uninit_rz_fntype);
-  lbc_init_rear_rz_fndecl = mf_make_builtin (FUNCTION_DECL, "init_rear_redzone",
-                                    lbc_init_uninit_rz_fntype);
-  lbc_uninit_rear_rz_fndecl = mf_make_builtin (FUNCTION_DECL, "uninit_rear_redzone",
-                                    lbc_init_uninit_rz_fntype);
-  lbc_ensure_sframe_bitmap_fndecl = mf_make_builtin (FUNCTION_DECL, "ensure_sframe_bitmap",
-                                    lbc_ensure_sframe_fntype);
-  lbc_is_char_red_fndecl = mf_make_builtin (FUNCTION_DECL, "is_char_red",
-				    lbc_is_char_red_fntype);
+	lbc_init_front_rz_fndecl = mf_make_builtin (FUNCTION_DECL, "init_front_redzone",
+			lbc_init_uninit_rz_fntype);
+	lbc_uninit_front_rz_fndecl = mf_make_builtin (FUNCTION_DECL, "uninit_front_redzone",
+			lbc_init_uninit_rz_fntype);
+	lbc_init_rear_rz_fndecl = mf_make_builtin (FUNCTION_DECL, "init_rear_redzone",
+			lbc_init_uninit_rz_fntype);
+	lbc_uninit_rear_rz_fndecl = mf_make_builtin (FUNCTION_DECL, "uninit_rear_redzone",
+			lbc_init_uninit_rz_fntype);
+	lbc_ensure_sframe_bitmap_fndecl = mf_make_builtin (FUNCTION_DECL, "ensure_sframe_bitmap",
+			lbc_ensure_sframe_fntype);
+	lbc_is_char_red_fndecl = mf_make_builtin (FUNCTION_DECL, "is_char_red",
+			lbc_is_char_red_fntype);
 }
 
 
@@ -358,24 +371,23 @@ mudflap_init (void)
 
  */
 
-static unsigned int
-execute_mudflap_function_ops (void)
+static unsigned int execute_mudflap_function_ops (void)
 {
-  struct gimplify_ctx gctx;
-  printf("Zahed: entering mudflap pass2\n");
+	struct gimplify_ctx gctx;
+	printf("Zahed: entering mudflap pass2\n");
+	//return;
+	/* Don't instrument functions such as the synthetic constructor
+	   built during mudflap_finish_file.  */
+	if (mf_marked_p (current_function_decl) ||
+			DECL_ARTIFICIAL (current_function_decl))
+		return 0;
 
-  /* Don't instrument functions such as the synthetic constructor
-     built during mudflap_finish_file.  */
-  if (mf_marked_p (current_function_decl) ||
-      DECL_ARTIFICIAL (current_function_decl))
-    return 0;
+	push_gimplify_context (&gctx);
 
-  push_gimplify_context (&gctx);
+	mf_xform_statements ();
 
-  mf_xform_statements ();
-
-  pop_gimplify_context (NULL);
-  return 0;
+	pop_gimplify_context (NULL);
+	return 0;
 }
 
 /* Check whether the given decl, generally a VAR_DECL or PARM_DECL, is
@@ -399,6 +411,35 @@ mf_decl_eligible_p (tree decl)
 	  && !DECL_HAS_VALUE_EXPR_P (decl));
 }
 
+tree find_instr_node(tree temp)
+{
+	int i = 0;
+	while(i < count){
+		//printf("myHtable[i].name : %s, mf_varname_tree(temp) : %s\n", 
+		//	myHtable[i].name, mf_varname_tree(temp));
+		if(strcmp(myHtable[i].name, mf_varname_tree(temp)) == 0){
+			//printf("---------------- match found --------------------\n\n");
+			return myHtable[i].t_name;
+		}
+		i++;
+	}
+	//printf("---------------- NO match found --------------------\n\n");
+	return NULL_TREE;
+}
+
+static tree mx_xform_instrument_pass2(tree temp)
+{
+	//	printf("========== Entered mx_xform_instrument_pass2, count : %d =============\n", count);
+	tree instr_node = find_instr_node(temp);
+	tree struct_type = TREE_TYPE(instr_node);
+
+	tree rz_orig_val = DECL_CHAIN(TYPE_FIELDS(struct_type));
+	//printf("============ Exiting mx_xform_instrument_pass2 =============\n");
+	return mf_mark(build3 (COMPONENT_REF, TREE_TYPE(rz_orig_val),
+				instr_node, rz_orig_val, NULL_TREE));
+}
+
+#if 0
 static tree
 mx_xform_instrument_pass2(tree temp)
 {
@@ -410,6 +451,8 @@ mx_xform_instrument_pass2(tree temp)
 	return mf_mark(build3 (COMPONENT_REF, TREE_TYPE(rz_orig_val),
 			get_identifier(instr_tree_name), rz_orig_val, NULL_TREE));
 }
+#endif
+
 
 static void
 mf_xform_derefs_1 (gimple_stmt_iterator *iter, tree *tp,
@@ -417,9 +460,9 @@ mf_xform_derefs_1 (gimple_stmt_iterator *iter, tree *tp,
 {
 	tree type, base, limit, addr, size, t;
 	tree temp;
-    bool check_red_flag = 0;
-    tree fncall_param_val;
-    gimple is_char_red_call;
+	bool check_red_flag = 0;
+	tree fncall_param_val;
+	gimple is_char_red_call;
 
 	/* Don't instrument read operations.  */
 	if (dirflag == integer_zero_node && flag_mudflap_ignore_reads)
@@ -448,20 +491,21 @@ mf_xform_derefs_1 (gimple_stmt_iterator *iter, tree *tp,
 			{
 				printf("------ INSIDE CASE ADDR_EXPR ---------\n");
 				temp = TREE_OPERAND(t, 0);
+				//TREE_OPERAND(t, 0) = global_struct_var;
 				if((TREE_OPERAND (t, 0) = mx_xform_instrument_pass2(temp)) == NULL_TREE)
-						printf("Failed to set tree operand\n");
+					printf("Failed to set tree operand\n");
 				return;
 			}
 		case ARRAY_REF:
 		case COMPONENT_REF:
 			{
-                check_red_flag = 1;
+				check_red_flag = 1;
 				temp = TREE_OPERAND(t, 0);
 				if(TREE_CODE(t) == ARRAY_REF)
 				{
 					printf("------ INSIDE CASE ARRAY_REF  ---------\n");
 					if((TREE_OPERAND (t, 0) = mx_xform_instrument_pass2(temp)) == NULL_TREE)
-							printf("Failed to set tree operand\n");
+						printf("Failed to set tree operand\n");
 				}
 				else if(TREE_CODE(t) == COMPONENT_REF)
 				{
@@ -469,9 +513,10 @@ mf_xform_derefs_1 (gimple_stmt_iterator *iter, tree *tp,
 					if(mf_decl_eligible_p(temp))
 					{
 						if((TREE_OPERAND (t, 0) = mx_xform_instrument_pass2(temp)) == NULL_TREE)
-								printf("Failed to set tree operand\n");
+							printf("Failed to set tree operand\n");
 					}
 				}
+				//return;
 				/* This is trickier than it may first appear.  The reason is
 				   that we are looking at expressions from the "inside out" at
 				   this point.  We may have a complex nested aggregate/array
@@ -572,7 +617,7 @@ out: looking just at the outer node is not enough.  */
 				}
 				else
 #endif
-				addr = build1 (ADDR_EXPR, build_pointer_type (type), t);
+					addr = build1 (ADDR_EXPR, build_pointer_type (type), t);
 
 				limit = fold_build2_loc (location, MINUS_EXPR, mf_uintptr_type,
 						fold_build2_loc (location, PLUS_EXPR, mf_uintptr_type,
@@ -584,7 +629,7 @@ out: looking just at the outer node is not enough.  */
 
 		case INDIRECT_REF:
 			printf("------ INSIDE CASE INDIRECT_REF  ---------\n");
-            check_red_flag = 1;
+			check_red_flag = 1;
 			addr = TREE_OPERAND (t, 0);
 			base = addr;
 			limit = fold_build2_loc (location, POINTER_PLUS_EXPR, ptr_type_node,
@@ -596,7 +641,7 @@ out: looking just at the outer node is not enough.  */
 
 		case MEM_REF:
 			printf("------ INSIDE CASE MEM_REF  ---------\n");
-            check_red_flag = 1;
+			check_red_flag = 1;
 			addr = fold_build2_loc (location, POINTER_PLUS_EXPR, TREE_TYPE (TREE_OPERAND (t, 0)),
 					TREE_OPERAND (t, 0),
 					fold_convert (sizetype, TREE_OPERAND (t, 1)));
@@ -670,10 +715,14 @@ out: looking just at the outer node is not enough.  */
 			printf("------ INSIDE CASE DEFAULT  ---------\n");
 			if(mf_decl_eligible_p(t))
 			{
+				//*tp = global_struct_var;
 				if((*tp = mx_xform_instrument_pass2(t)) == NULL_TREE)
-						printf("Failed to set tree operand\n");
+					printf("Failed to set tree operand\n");
 			}
 	}
+	//	return;
+	// Add the call to is_char_red
+	printf("Entering is_char_red\n");
 
     // Add the call to is_char_red
     if (check_red_flag) {
@@ -693,59 +742,59 @@ out: looking just at the outer node is not enough.  */
 static void
 mf_xform_statements (void)
 {
-  basic_block bb, next;
-  gimple_stmt_iterator i;
-  int saved_last_basic_block = last_basic_block;
-  enum gimple_rhs_class grhs_class;
+	basic_block bb, next;
+	gimple_stmt_iterator i;
+	int saved_last_basic_block = last_basic_block;
+	enum gimple_rhs_class grhs_class;
 
-  bb = ENTRY_BLOCK_PTR ->next_bb;
-  do
-    {
-      next = bb->next_bb;
-      for (i = gsi_start_bb (bb); !gsi_end_p (i); gsi_next (&i))
-        {
-          gimple s = gsi_stmt (i);
+	bb = ENTRY_BLOCK_PTR ->next_bb;
+	do
+	{
+		next = bb->next_bb;
+		for (i = gsi_start_bb (bb); !gsi_end_p (i); gsi_next (&i))
+		{
+			gimple s = gsi_stmt (i);
 
-          /* Only a few GIMPLE statements can reference memory.  */
-          switch (gimple_code (s))
-            {
-            case GIMPLE_ASSIGN:
-		printf("\n\n******** Gimlpe Assign LHS ***********\n");
-		mf_xform_derefs_1 (&i, gimple_assign_lhs_ptr (s),
-		  		 gimple_location (s), integer_one_node);
-	    printf("******** Gimlpe Assign RHS ***********\n");
-		mf_xform_derefs_1 (&i, gimple_assign_rhs1_ptr (s),
-		  		 gimple_location (s), integer_zero_node);
-	      grhs_class = get_gimple_rhs_class (gimple_assign_rhs_code (s));
-	      if (grhs_class == GIMPLE_BINARY_RHS)
-		mf_xform_derefs_1 (&i, gimple_assign_rhs2_ptr (s),
-				   gimple_location (s), integer_zero_node);
-              break;
+			/* Only a few GIMPLE statements can reference memory.  */
+			switch (gimple_code (s))
+			{
+				case GIMPLE_ASSIGN:
+					printf("\n\n******** Gimlpe Assign LHS ***********\n");
+					mf_xform_derefs_1 (&i, gimple_assign_lhs_ptr (s),
+							gimple_location (s), integer_one_node);
+					printf("******** Gimlpe Assign RHS ***********\n");
+					mf_xform_derefs_1 (&i, gimple_assign_rhs1_ptr (s),
+							gimple_location (s), integer_zero_node);
+					grhs_class = get_gimple_rhs_class (gimple_assign_rhs_code (s));
+					if (grhs_class == GIMPLE_BINARY_RHS)
+						mf_xform_derefs_1 (&i, gimple_assign_rhs2_ptr (s),
+								gimple_location (s), integer_zero_node);
+					break;
 
-            case GIMPLE_RETURN:
-              if (gimple_return_retval (s) != NULL_TREE)
-                {
-                  mf_xform_derefs_1 (&i, gimple_return_retval_ptr (s),
-				     gimple_location (s),
-				     integer_zero_node);
-                }
-              break;
+				case GIMPLE_RETURN:
+					if (gimple_return_retval (s) != NULL_TREE)
+					{
+						mf_xform_derefs_1 (&i, gimple_return_retval_ptr (s),
+								gimple_location (s),
+								integer_zero_node);
+					}
+					break;
 
-            case GIMPLE_CALL:
-              {
-                tree fndecl = gimple_call_fndecl (s);
-                if (fndecl && (DECL_FUNCTION_CODE (fndecl) == BUILT_IN_ALLOCA))
-                  gimple_call_set_cannot_inline (s, true);
-              }
-              break;
+				case GIMPLE_CALL:
+					{
+						tree fndecl = gimple_call_fndecl (s);
+						if (fndecl && (DECL_FUNCTION_CODE (fndecl) == BUILT_IN_ALLOCA))
+							gimple_call_set_cannot_inline (s, true);
+					}
+					break;
 
-            default:
-              ;
-            }
-        }
-      bb = next;
-    }
-  while (bb && bb->index <= saved_last_basic_block);
+				default:
+					;
+			}
+		}
+		bb = next;
+	}
+	while (bb && bb->index <= saved_last_basic_block);
 }
 
 /* ------------------------------------------------------------------------ */
@@ -760,21 +809,21 @@ mf_xform_statements (void)
 static unsigned int
 execute_mudflap_function_decls (void)
 {
-  struct gimplify_ctx gctx;
+	struct gimplify_ctx gctx;
 
-  /* Don't instrument functions such as the synthetic constructor
-     built during mudflap_finish_file.  */
-  if (mf_marked_p (current_function_decl) ||
-      DECL_ARTIFICIAL (current_function_decl))
-    return 0;
+	/* Don't instrument functions such as the synthetic constructor
+	   built during mudflap_finish_file.  */
+	if (mf_marked_p (current_function_decl) ||
+			DECL_ARTIFICIAL (current_function_decl))
+		return 0;
 
-  push_gimplify_context (&gctx);
+	push_gimplify_context (&gctx);
 
-  mf_xform_decls (gimple_body (current_function_decl),
-                  DECL_ARGUMENTS (current_function_decl));
+	mf_xform_decls (gimple_body (current_function_decl),
+			DECL_ARGUMENTS (current_function_decl));
 
-  pop_gimplify_context (NULL);
-  return 0;
+	pop_gimplify_context (NULL);
+	return 0;
 }
 
 /* This struct is passed between mf_xform_decls to store state needed
@@ -877,21 +926,24 @@ mx_register_decls (tree decl, gimple_seq seq, gimple stmt, location_t location, 
                };
              */
 
+			//TREE_VALUE(mf_varname_tree(decl))
+			
             tree struct_type = create_struct_type(decl);
-
-            // Append the new struct to decls in scope. Still need to figure out how to remove decl.
             tree struct_var = create_struct_var(struct_type, decl, location);
-            // gimple_bind_append_vars(stmt, struct_type);
             declare_vars(struct_var, stmt, 0);
 
+			/* Inserting into hashtable */
+			strcpy(myHtable[count].name, mf_varname_tree(decl));
+			myHtable[count].t_name = struct_var;
+			count++;
+
+			//printf("Pass1 IDPTR : %s\n",IDENTIFIER_POINTER(DECL_NAME(struct_var)));
             tree size = NULL_TREE;
             gimple uninit_fncall_front, uninit_fncall_rear, init_fncall_front, \
                             init_fncall_rear, init_assign_stmt;
             tree fncall_param_front, fncall_param_rear;
-
             /* Variable-sized objects should have sizes already been
                gimplified when we got here. */
-            //size = convert (size_type_node, TYPE_SIZE_UNIT (TREE_TYPE (decl)));
             size = convert (unsigned_type_node, size_int(6U)); // TODO is this right? we need to provide size of RZ here.
             gcc_assert (is_gimple_val (size));
 
