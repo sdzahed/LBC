@@ -858,7 +858,7 @@ create_struct_type(tree decl)
 {
     char type_name[50];
     tree array_idx =  build_index_type (size_int (6U)); // TODO the size needs to be computed on the fly. How?
-    tree rz_array = build_array_type (integer_type_node, array_idx);
+    tree rz_array = build_array_type (unsigned_type_node, array_idx);
 
     tree fieldfront = build_decl (UNKNOWN_LOCATION,
             FIELD_DECL, get_identifier ("rz_front"), rz_array);
@@ -948,7 +948,7 @@ mx_register_decls (tree decl, gimple_seq seq, gimple stmt, location_t location, 
 
     while (decl != NULL_TREE)
     {
-        if (mf_decl_eligible_p (decl)
+        if ((mf_decl_eligible_p (decl) || TREE_CODE(TREE_TYPE(decl)) == ARRAY_TYPE)
                 /* Not already processed.  */
                 && ! mf_marked_p (decl)
                 /* Automatic variable.  */
