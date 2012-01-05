@@ -908,6 +908,7 @@ mx_register_decls (tree decl, gimple_seq seq, gimple stmt, location_t location, 
 {
     gimple_seq finally_stmts = NULL;
     gimple_stmt_iterator initially_stmts = gsi_start (seq);
+    bool sframe_inserted = false;
 
     while (decl != NULL_TREE)
     {
@@ -927,6 +928,13 @@ mx_register_decls (tree decl, gimple_seq seq, gimple stmt, location_t location, 
              */
 
 			//TREE_VALUE(mf_varname_tree(decl))
+
+            if (!func_args && !sframe_inserted){
+                gimple ensure_fn_call = gimple_build_call (lbc_ensure_sframe_bitmap_fndecl, 0);
+                gimple_set_location (ensure_fn_call, location);
+                gsi_insert_before (&initially_stmts, ensure_fn_call, GSI_SAME_STMT);
+                sframe_inserted = true;
+            }
 			
             tree struct_type = create_struct_type(decl);
             tree struct_var = create_struct_var(struct_type, decl, location);
@@ -944,7 +952,7 @@ mx_register_decls (tree decl, gimple_seq seq, gimple stmt, location_t location, 
             tree fncall_param_front, fncall_param_rear;
             /* Variable-sized objects should have sizes already been
                gimplified when we got here. */
-            size = convert (unsigned_type_node, size_int(6U)); // TODO is this right? we need to provide size of RZ here.
+            size = convert (unsigned_type_node, size_int(8U)); // TODO is this right? we need to provide size of RZ here.
             gcc_assert (is_gimple_val (size));
 
             // Need to change mf_mark
@@ -1016,11 +1024,6 @@ mx_register_decls (tree decl, gimple_seq seq, gimple stmt, location_t location, 
     /* Actually, (initially_stmts!=NULL) <=> (finally_stmts!=NULL) */
     if (finally_stmts != NULL)
     {
-        if (!func_args){
-            gimple ensure_fn_call = gimple_build_call (lbc_ensure_sframe_bitmap_fndecl, 0);
-            gimple_set_location (ensure_fn_call, location);
-            gsi_insert_before (&initially_stmts, ensure_fn_call, GSI_SAME_STMT);
-        }
         gimple stmt = gimple_build_try (seq, finally_stmts, GIMPLE_TRY_FINALLY);
         gimple_seq new_seq = gimple_seq_alloc ();
 
