@@ -1057,7 +1057,7 @@ mx_register_decls (tree decl, gimple_seq seq, gimple stmt, location_t location, 
             tree fncall_param_front, fncall_param_rear;
             /* Variable-sized objects should have sizes already been
                gimplified when we got here. */
-            size = convert (unsigned_type_node, size_int(8U)); // TODO is this right? we need to provide size of RZ here.
+            size = convert (unsigned_type_node, size_int(24U)); // TODO is this right? we need to provide size of RZ here.
             gcc_assert (is_gimple_val (size));
 
             // Need to change mf_mark
