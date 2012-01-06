@@ -496,6 +496,9 @@ static tree decode_array_ref(tree t, tree temp_instr)
 					tree front_rz_offset= size_binop (MULT_EXPR,
 						fold_convert(sizetype, fournode), 
 						fold_convert(sizetype, sixnode));
+					front_rz_offset = size_binop (MINUS_EXPR,
+						fold_convert(sizetype, front_rz_offset), 
+						fold_convert(sizetype,integer_one_node));
 					tree final_offset = size_binop (PLUS_EXPR, 
 						fold_convert(sizetype, front_rz_offset), 
 						fold_convert(sizetype, off_tree));
@@ -518,7 +521,7 @@ mf_xform_derefs_1 (gimple_stmt_iterator *iter, tree *tp,
 	bool check_red_flag = 0;
 	tree fncall_param_val;
 	gimple is_char_red_call;
-	tree temp_instr;
+	tree temp_instr, type_node;
 
 	/* Don't instrument read operations.  */
 	if (dirflag == integer_zero_node && flag_mudflap_ignore_reads)
@@ -541,6 +544,7 @@ mf_xform_derefs_1 (gimple_stmt_iterator *iter, tree *tp,
 		return;
 	}
 
+    type_node = NULL_TREE;
 	switch (TREE_CODE (t))
 	{
 		case ADDR_EXPR:
@@ -567,6 +571,7 @@ mf_xform_derefs_1 (gimple_stmt_iterator *iter, tree *tp,
 						printf("Failed to get tree operand\n");
 						return;
 					}
+                    type_node = TREE_TYPE(TREE_TYPE(temp));
 					addr = decode_array_ref(t, temp_instr);
 					base = addr;
 					TREE_OPERAND(t, 0) = temp_instr;
@@ -702,6 +707,7 @@ mf_xform_derefs_1 (gimple_stmt_iterator *iter, tree *tp,
 		case MEM_REF:
 			printf("------ INSIDE CASE MEM_REF  ---------\n");
 			check_red_flag = 1;
+            type_node = TREE_TYPE(TREE_OPERAND(t, 0));
 			addr = fold_build2_loc (location, POINTER_PLUS_EXPR, TREE_TYPE (TREE_OPERAND (t, 0)),
 					TREE_OPERAND (t, 0), fold_convert (sizetype, TREE_OPERAND (t, 1)));
 			base = addr;
@@ -795,8 +801,12 @@ mf_xform_derefs_1 (gimple_stmt_iterator *iter, tree *tp,
 
     // Add the call to is_char_red
     if (check_red_flag) {
-        fncall_param_val = fold_build2_loc (location, MEM_REF, unsigned_type_node, base, \
-                            build_int_cst(build_pointer_type(unsigned_type_node), 0));
+        //fncall_param_val = fold_build2_loc (location, MEM_REF, unsigned_type_node, base, \
+        //                    build_int_cst(build_pointer_type(unsigned_type_node), 0));
+        gcc_assert(type_node);
+        fncall_param_val = fold_build2_loc (location, MEM_REF, type_node, base, \
+                            build_int_cst(build_pointer_type(type_node), 0));
+        fncall_param_val = fold_convert_loc (location, unsigned_type_node, fncall_param_val);
         is_char_red_call = gimple_build_call (lbc_is_char_red_fndecl, 3, fncall_param_val, size, \
                             fold_convert_loc(location, ptr_type_node, base));
         gimple_set_location (is_char_red_call, location);
