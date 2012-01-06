@@ -472,16 +472,53 @@ mx_xform_instrument_pass2(tree temp)
 }
 #endif
 
+static tree decode_array_ref(tree t, tree temp_instr)
+{
+					tree t2 = t;
+					tree off_tree = size_zero_node;
+					tree index = TREE_OPERAND (t2, 1);
+					tree low_bound = array_ref_low_bound (t2);
+					tree unit_size = array_ref_element_size (t2);
+						
+					if (! integer_zerop (low_bound))
+						index = fold_build2 (MINUS_EXPR, TREE_TYPE (index), index, low_bound);
+						
+					off_tree = size_binop (PLUS_EXPR,
+								size_binop (MULT_EXPR, fold_convert (sizetype, index), unit_size),
+								off_tree);
+
+					tree fournode = size_binop (PLUS_EXPR,
+						fold_convert(sizetype,integer_one_node), 
+						fold_convert(sizetype,integer_three_node));
+					tree sixnode = size_binop (PLUS_EXPR,
+						fold_convert(sizetype,integer_three_node), 
+						fold_convert(sizetype,integer_three_node));
+					tree front_rz_offset= size_binop (MULT_EXPR,
+						fold_convert(sizetype, fournode), 
+						fold_convert(sizetype, sixnode));
+					tree final_offset = size_binop (PLUS_EXPR, 
+						fold_convert(sizetype, front_rz_offset), 
+						fold_convert(sizetype, off_tree));
+					tree origvar = build1 (ADDR_EXPR, 
+						build_pointer_type (TREE_TYPE(TREE_OPERAND (temp_instr, 0))), 
+						TREE_OPERAND (temp_instr, 0));
+
+					tree addr = fold_convert(ptr_type_node, origvar);
+					addr = fold_build2(POINTER_PLUS_EXPR, ptr_type_node,
+							addr, fold_convert(sizetype, final_offset));
+					return addr;
+}
 
 static void
 mf_xform_derefs_1 (gimple_stmt_iterator *iter, tree *tp,
 		location_t location, tree dirflag)
 {
-	tree type, base, limit, addr, size, t;
-	tree temp;
+	tree type, base=NULL_TREE, limit, addr, size, t, elt=NULL_TREE;
+	tree temp, field, offset;
 	bool check_red_flag = 0;
 	tree fncall_param_val;
 	gimple is_char_red_call;
+	tree temp_instr;
 
 	/* Don't instrument read operations.  */
 	if (dirflag == integer_zero_node && flag_mudflap_ignore_reads)
@@ -510,7 +547,9 @@ mf_xform_derefs_1 (gimple_stmt_iterator *iter, tree *tp,
 			{
 				printf("------ INSIDE CASE ADDR_EXPR ---------\n");
 				temp = TREE_OPERAND(t, 0);
-				//TREE_OPERAND(t, 0) = global_struct_var;
+				if(TREE_CODE(temp) == STRING_CST)
+					return;
+				printf("TREE_CODE(temp) : %s\n", tree_code_name[(int)TREE_CODE(temp)]);
 				if((TREE_OPERAND (t, 0) = mx_xform_instrument_pass2(temp)) == NULL_TREE)
 					printf("Failed to set tree operand\n");
 				return;
@@ -520,129 +559,129 @@ mf_xform_derefs_1 (gimple_stmt_iterator *iter, tree *tp,
 			{
 				check_red_flag = 1;
 				temp = TREE_OPERAND(t, 0);
-				if(TREE_CODE(t) == ARRAY_REF)
-				{
+				if(TREE_CODE(t) == ARRAY_REF) {
 					printf("------ INSIDE CASE ARRAY_REF  ---------\n");
-					if((TREE_OPERAND (t, 0) = mx_xform_instrument_pass2(temp)) == NULL_TREE)
-						printf("Failed to set tree operand\n");
+					//printf("TREE_CODE(temp) : %s\n", tree_code_name[(int)TREE_CODE(temp)]);
+					tree temp_instr = mx_xform_instrument_pass2(temp);
+					if(temp_instr == NULL_TREE){
+						printf("Failed to get tree operand\n");
+						return;
+					}
+					addr = decode_array_ref(t, temp_instr);
+					base = addr;
+					TREE_OPERAND(t, 0) = temp_instr;
+					break;
 				}
-				else if(TREE_CODE(t) == COMPONENT_REF)
-				{
+				else if(TREE_CODE(t) == COMPONENT_REF) {
 					printf("------ INSIDE CASE COMPONENT_REF  ---------\n");
+					temp = TREE_OPERAND(t, 0);
 					if(mf_decl_eligible_p(temp))
 					{
-						if((TREE_OPERAND (t, 0) = mx_xform_instrument_pass2(temp)) == NULL_TREE)
-							printf("Failed to set tree operand\n");
+						printf("Elig decl\n");
+						TREE_OPERAND(t, 0) = mx_xform_instrument_pass2(temp);
+						if(TREE_OPERAND(t, 0) == NULL_TREE){
+							printf("Failed to get tree operand\n");
+							return;
+						}
+						return;
 					}
+					else if(TREE_CODE(TREE_OPERAND(t,0)) == MEM_REF){
+						printf("Sub - memref\n");
+						tree field = TREE_OPERAND (t, 1);
+						tree offset = component_ref_field_offset (t);
+						if (! DECL_SIZE_UNIT (field)){
+							printf("expr NULL_TREE\n");
+							return;
+						}
+						addr = build1 (ADDR_EXPR, build_pointer_type(TREE_TYPE(field)), field);
+						//addr = TREE_OPERAND (var, 0);
+						//base = build1 (ADDR_EXPR, build_pointer_type (TREE_TYPE (var)), var);
+						//base = build1 (ADDR_EXPR, build_pointer_type (type), t);
+						base = fold_build2(POINTER_PLUS_EXPR, ptr_type_node,
+										t, fold_convert(sizetype, offset));						
+					}
+					else
+						return;
+					//TREE_OPERAND(t, 0) = temp_instr;
+					//addr = build1 (ADDR_EXPR, build_pointer_type (type), t);
+					//base = addr;
+					break;
 				}
-				//return;
-				/* This is trickier than it may first appear.  The reason is
-				   that we are looking at expressions from the "inside out" at
-				   this point.  We may have a complex nested aggregate/array
-				   expression (e.g. "a.b[i].c"), maybe with an indirection as
-				   the leftmost operator ("p->a.b.d"), where instrumentation
-				   is necessary.  Or we may have an innocent "a.b.c"
-				   expression that must not be instrumented.  We need to
-				   recurse all the way down the nesting structure to figure it
-out: looking just at the outer node is not enough.  */
+				#if 0
 				tree var;
 				int component_ref_only = (TREE_CODE (t) == COMPONENT_REF);
-				/* If we have a bitfield component reference, we must note the
-				   innermost addressable object in ELT, from which we will
-				   construct the byte-addressable bounds of the bitfield.  */
-				tree elt = NULL_TREE;
-#if 0
-				int bitfield_ref_p = (TREE_CODE (t) == COMPONENT_REF
-						&& DECL_BIT_FIELD_TYPE (TREE_OPERAND (t, 1)));
-#endif
-
-				/* Iterate to the top of the ARRAY_REF/COMPONENT_REF
-				   containment hierarchy to find the outermost VAR_DECL.  */
+				int while_count = 0;
 				var = TREE_OPERAND (t, 0);
-				while (1)
-				{
-#if 0
-					if (bitfield_ref_p && elt == NULL_TREE
-							&& (TREE_CODE (var) == ARRAY_REF
-								|| TREE_CODE (var) == COMPONENT_REF))
-						elt = var;
-#endif
-
-					if (TREE_CODE (var) == ARRAY_REF)
-					{
+				while (1){
+					printf("Inside while\n");
+					/* Iterate to the top of the ARRAY_REF/COMPONENT_REF
+					   containment hierarchy to find the outermost VAR_DECL.  */
+					if (TREE_CODE (var) == ARRAY_REF){
+						printf("1\n");
 						component_ref_only = 0;
 						var = TREE_OPERAND (var, 0);
 					}
-					else if (TREE_CODE (var) == COMPONENT_REF)
+					else if (TREE_CODE (var) == COMPONENT_REF){
 						var = TREE_OPERAND (var, 0);
-					else if (INDIRECT_REF_P (var)
-							|| TREE_CODE (var) == MEM_REF)
-					{
-						base = TREE_OPERAND (var, 0);
+						printf("2\n");
+					}
+					else if (INDIRECT_REF_P (var) || TREE_CODE (var) == MEM_REF){
+						tree field = TREE_OPERAND (t, 1);
+						tree offset = component_ref_field_offset (t);
+						if (! DECL_SIZE_UNIT (field)){
+							printf("expr NULL_TREE\n");
+							break;
+						}
+						addr = build1 (ADDR_EXPR, build_pointer_type(TREE_TYPE(var)), var);
+						//addr = TREE_OPERAND (var, 0);
+						//base = build1 (ADDR_EXPR, build_pointer_type (TREE_TYPE (var)), var);
+						//base = build1 (ADDR_EXPR, build_pointer_type (type), t);
+						base = fold_build2(POINTER_PLUS_EXPR, ptr_type_node,
+									addr, fold_convert(sizetype, offset));
 						break;
 					}
-					else if (TREE_CODE (var) == VIEW_CONVERT_EXPR)
-					{
+					else if (TREE_CODE (var) == VIEW_CONVERT_EXPR){
+						printf("4\n");
 						var = TREE_OPERAND (var, 0);
-						if (CONSTANT_CLASS_P (var)
-								&& TREE_CODE (var) != STRING_CST)
+						if (CONSTANT_CLASS_P (var) && TREE_CODE (var) != STRING_CST){
+							printf("Returning at 1\n");
 							return;
+						}
 					}
-					else
-					{
-						gcc_assert (TREE_CODE (var) == VAR_DECL
-								|| TREE_CODE (var) == PARM_DECL
-								|| TREE_CODE (var) == RESULT_DECL
-								|| TREE_CODE (var) == STRING_CST);
-						/* Don't instrument this access if the underlying
-						   variable is not "eligible".  This test matches
-						   those arrays that have only known-valid indexes,
-						   and thus are not labeled TREE_ADDRESSABLE.  */
-						if (! mf_decl_eligible_p (var) || component_ref_only)
-							return;
-						else
-						{
-							base = build1 (ADDR_EXPR,
-									build_pointer_type (TREE_TYPE (var)), var);
+					else{
+						printf("5 - TREE_CODE(var) : %s\n", tree_code_name[(int)TREE_CODE(var)]);
+						gcc_assert (TREE_CODE (var) == VAR_DECL || TREE_CODE (var) == PARM_DECL
+								|| TREE_CODE (var) == RESULT_DECL || TREE_CODE (var) == STRING_CST);
+						/*Don't instrument this access if the underlying variable is not "eligible".  This test matches
+						   those arrays that have only known-valid indexes, and thus are not labeled TREE_ADDRESSABLE.*/
+						if ((! mf_decl_eligible_p (var) || component_ref_only)){
+							//if((TREE_CODE(t) == ARRAY_REF) && (while_count < 2)){
+								printf("while_count : %d\n", while_count);
+								printf("Returning at 2\n");
+								return;
+							//}
+							//else if((TREE_CODE(t) == ARRAY_REF) && while_count == 2){
+							//	base = build1 (ADDR_EXPR, build_pointer_type (TREE_TYPE (var)), var);
+							//	break;
+							//}
+						}
+						else{
+							base = build1 (ADDR_EXPR, build_pointer_type (TREE_TYPE (var)), var);
 							break;
 						}
 					}
 				}
-
-				/* Handle the case of ordinary non-indirection structure
-				   accesses.  These have only nested COMPONENT_REF nodes (no
-				   INDIRECT_REF), but pass through the above filter loop.
-				   Note that it's possible for such a struct variable to match
-				   the eligible_p test because someone else might take its
-				   address sometime.  */
-
-				/* We need special processing for bitfield components, because
-				   their addresses cannot be taken.  */
-#if 0
-				if (bitfield_ref_p)
-				{
-					tree field = TREE_OPERAND (t, 1);
-
-					if (TREE_CODE (DECL_SIZE_UNIT (field)) == INTEGER_CST)
-						size = DECL_SIZE_UNIT (field);
-
-					if (elt)
-						elt = build1 (ADDR_EXPR, build_pointer_type (TREE_TYPE (elt)),
-								elt);
-					addr = fold_convert_loc (location, ptr_type_node, elt ? elt : base);
-					addr = fold_build2_loc (location, POINTER_PLUS_EXPR, ptr_type_node,
-							addr, fold_convert_loc (location, sizetype,
-								byte_position (field)));
-				}
-				else
-#endif
-					addr = build1 (ADDR_EXPR, build_pointer_type (type), t);
-
+				#endif
+				//if(base == NULL_TREE){
+					//addr = build1 (ADDR_EXPR, build_pointer_type (type), t);
+					//base = addr;
+				//}
+				#if 0
 				limit = fold_build2_loc (location, MINUS_EXPR, mf_uintptr_type,
 						fold_build2_loc (location, PLUS_EXPR, mf_uintptr_type,
-							convert (mf_uintptr_type, addr),
-							size),
-						integer_one_node);
+						convert (mf_uintptr_type, addr),
+						size), integer_one_node);
+				#endif
 				break;
 			}
 
@@ -651,30 +690,34 @@ out: looking just at the outer node is not enough.  */
 			check_red_flag = 1;
 			addr = TREE_OPERAND (t, 0);
 			base = addr;
-			limit = fold_build2_loc (location, POINTER_PLUS_EXPR, ptr_type_node,
+			#if 0
+			//limit = fold_build2_loc (location, POINTER_PLUS_EXPR, ptr_type_node,
 					fold_build2_loc (location,
 						POINTER_PLUS_EXPR, ptr_type_node, base,
 						size),
 					size_int (-1));
+			#endif
 			break;
 
 		case MEM_REF:
 			printf("------ INSIDE CASE MEM_REF  ---------\n");
 			check_red_flag = 1;
 			addr = fold_build2_loc (location, POINTER_PLUS_EXPR, TREE_TYPE (TREE_OPERAND (t, 0)),
-					TREE_OPERAND (t, 0),
-					fold_convert (sizetype, TREE_OPERAND (t, 1)));
+					TREE_OPERAND (t, 0), fold_convert (sizetype, TREE_OPERAND (t, 1)));
 			base = addr;
+			#if 0
 			limit = fold_build2_loc (location, POINTER_PLUS_EXPR, ptr_type_node,
 					fold_build2_loc (location,
 						POINTER_PLUS_EXPR, ptr_type_node, base,
 						size),
-					size_int (-1));
+						size_int (-1));
+			#endif
 			break;
 
 		case TARGET_MEM_REF:
 			printf("------ INSIDE CASE TARGET_MEM_REF  ---------\n");
 			return;
+			#if 0
 			addr = tree_mem_ref_addr (ptr_type_node, t);
 			base = addr;
 			limit = fold_build2_loc (location, POINTER_PLUS_EXPR, ptr_type_node,
@@ -683,17 +726,21 @@ out: looking just at the outer node is not enough.  */
 						size),
 					size_int (-1));
 			break;
+			#endif
 
 		case ARRAY_RANGE_REF:
 			printf("------ INSIDE CASE ARRAY_RANGE_REF  ---------\n");
 			return;
+			#if 0
 			warning (OPT_Wmudflap,
 					"mudflap checking not yet implemented for ARRAY_RANGE_REF");
 			return;
+			#endif
 
 		case BIT_FIELD_REF:
 			printf("------ INSIDE CASE BIT_FIELD_REF  ---------\n");
 			return;
+			#if 0
 			/* ??? merge with COMPONENT_REF code above? */
 			{
 				tree ofs, rem, bpu;
@@ -722,25 +769,28 @@ out: looking just at the outer node is not enough.  */
 						ptr_type_node, addr, ofs);
 
 				base = addr;
+				#if 0
 				limit = fold_build2_loc (location, POINTER_PLUS_EXPR, ptr_type_node,
 						fold_build2_loc (location,
 							POINTER_PLUS_EXPR, ptr_type_node,
 							base, size),
 						size_int (-1));
+				#endif
 			}
+			#endif
 			break;
 
 		default:
 			printf("------ INSIDE CASE DEFAULT  ---------\n");
 			if(mf_decl_eligible_p(t))
 			{
-				//*tp = global_struct_var;
-				if((*tp = mx_xform_instrument_pass2(t)) == NULL_TREE)
+				if((*tp = mx_xform_instrument_pass2(t)) == NULL_TREE){
 					printf("Failed to set tree operand\n");
+					return;
+				}
 			}
 	}
-	//	return;
-	// Add the call to is_char_red
+
 	printf("Entering is_char_red\n");
 
     // Add the call to is_char_red
@@ -752,6 +802,7 @@ out: looking just at the outer node is not enough.  */
         gimple_set_location (is_char_red_call, location);
         gsi_insert_before (iter, is_char_red_call, GSI_SAME_STMT);
     }
+	printf("Done with is_char_red\n");
 }
 
 /* Transform
