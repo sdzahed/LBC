@@ -1067,10 +1067,10 @@ mx_register_decls (tree decl, gimple_seq seq, gimple stmt, location_t location, 
             // fncall_param_rear = mf_mark (build1 (ADDR_EXPR, ptr_type_node, fieldrear));
             tree rz_front = TYPE_FIELDS(struct_type);
             tree rz_rear = DECL_CHAIN(DECL_CHAIN(TYPE_FIELDS (struct_type)));
-            fncall_param_front = mf_mark (build3 (COMPONENT_REF, TREE_TYPE(rz_front),
-                                      struct_var, rz_front, NULL_TREE));
-            fncall_param_rear = mf_mark (build3 (COMPONENT_REF, TREE_TYPE(rz_rear),
-                                      struct_var, rz_rear, NULL_TREE));
+            fncall_param_front = mf_mark (build1 (ADDR_EXPR, ptr_type_node, build3 (COMPONENT_REF, TREE_TYPE(rz_front),
+                                                      struct_var, rz_front, NULL_TREE)));
+            fncall_param_rear = mf_mark (build1 (ADDR_EXPR, ptr_type_node, build3 (COMPONENT_REF, TREE_TYPE(rz_rear),
+                                                      struct_var, rz_rear, NULL_TREE)));
 
             uninit_fncall_front = gimple_build_call (lbc_uninit_front_rz_fndecl, 2, fncall_param_front, size);
             uninit_fncall_rear = gimple_build_call (lbc_uninit_rear_rz_fndecl, 2, fncall_param_rear, size);
